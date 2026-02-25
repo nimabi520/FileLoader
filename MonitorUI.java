@@ -259,9 +259,52 @@ public class MonitorUI {
         table.getColumnModel().getColumn(2).setPreferredWidth(100); // 批次ID
         table.getColumnModel().getColumn(3).setPreferredWidth(100); // 状态
         
+        // 添加右键菜单
+        JPopupMenu popupMenu = new JPopupMenu();
+        JMenuItem downloadBatchItem = new JMenuItem("下载批次文件");
+        JMenuItem downloadWrongItem = new JMenuItem("下载异常文件");
+        
+        downloadBatchItem.addActionListener(e -> {
+            int selectedRow = table.getSelectedRow();
+            if (selectedRow >= 0) {
+                String batchId = (String) table.getValueAt(selectedRow, 2);
+                downloadBatchFiles(batchId, false);
+            }
+        });
+        
+        downloadWrongItem.addActionListener(e -> {
+            int selectedRow = table.getSelectedRow();
+            if (selectedRow >= 0) {
+                String batchId = (String) table.getValueAt(selectedRow, 2);
+                downloadBatchFiles(batchId, true);
+            }
+        });
+        
+        popupMenu.add(downloadBatchItem);
+        popupMenu.add(downloadWrongItem);
+        table.setComponentPopupMenu(popupMenu);
+        
         JScrollPane scrollPane = new JScrollPane(table);
         monitorPanel.add(scrollPane, BorderLayout.CENTER);
         return monitorPanel;
+    }
+
+    /**
+     * 下载批次文件
+     */
+    private void downloadBatchFiles(String batchId, boolean withWrong) {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("选择保存目录");
+        if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
+            File saveDir = chooser.getSelectedFile();
+            addLog("开始下载批次 " + batchId + (withWrong ? " 的异常文件" : " 的文件") + "...");
+            new Thread(() -> {
+                String result = DownloadService.downloadBatch(batchId, saveDir, withWrong);
+                addLog(result);
+                updateStatus(result);
+            }).start();
+        }
     }
 
     /**
