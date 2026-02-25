@@ -1,0 +1,18 @@
+# 编译输出目录
+release/
+out/
+build/
+target/
+bin/
+
+# IDE 配置文件
+.idea/
+*.iml
+.vscode/
+
+# 日志文件
+*.log
+
+# 操作系统生成文件
+.DS_Store
+Thumbs.db
