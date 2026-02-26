@@ -17,7 +17,7 @@ public class AppConfig {
     static final Properties properties = new Properties();
 
     // 默认配置常量
-    private static final String DEFAULT_SERVER_URL = "http://10.21.76.68:8081";
+    private static final String DEFAULT_SERVER_URL = "http://10.21.76.68:8081/";
     private static final int DEFAULT_CONNECT_TIMEOUT = 30;
     private static final int DEFAULT_READ_TIMEOUT = 60;
     private static final int DEFAULT_WRITE_TIMEOUT = 60;
