@@ -3,6 +3,8 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.util.logging.Level;
@@ -36,13 +38,21 @@ public class DownloadService {
     }
 
     public static String downloadBatch(String batchId, File saveDir, boolean withWrong) {
-        String endpoint = "batch/" + batchId + (withWrong ? "/batchDownloadWithWrong" : "/batchDownload");
+        String safeBatchId = batchId == null ? "" : batchId.trim();
+        if (safeBatchId.isEmpty()) {
+            logger.warning("Download failed: batchId is empty");
+            return "下载失败: 批次ID为空";
+        }
+
+        String encodedBatchId = URLEncoder.encode(safeBatchId, StandardCharsets.UTF_8);
+        String endpoint = "batch/" + encodedBatchId + (withWrong ? "/batchDownloadWithWrong" : "/batchDownload");
         String serverUrl = AppConfig.getServerUrl();
         if (!serverUrl.endsWith("/")) {
             serverUrl += "/";
         }
         
         String urlStr = serverUrl + endpoint;
+        logger.info("Download URL: " + urlStr);
         
         try {
             URL url = new URL(urlStr);
@@ -57,6 +67,8 @@ public class DownloadService {
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(AppConfig.getConnectTimeout() * 1000);
             connection.setReadTimeout(AppConfig.getReadTimeout() * 1000);
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            connection.setRequestProperty("Accept", "*/*");
             
             int responseCode = connection.getResponseCode();
             if (responseCode == 200) {
@@ -82,6 +94,15 @@ public class DownloadService {
                 logger.info("Downloaded successfully: " + saveFile.getAbsolutePath());
                 return "下载成功: " + saveFile.getAbsolutePath();
             } else {
+                try (InputStream errorStream = connection.getErrorStream()) {
+                    if (errorStream != null) {
+                        byte[] errorBytes = errorStream.readAllBytes();
+                        String errorText = new String(errorBytes, StandardCharsets.UTF_8).trim();
+                        if (!errorText.isEmpty()) {
+                            logger.warning("Download error body: " + errorText);
+                        }
+                    }
+                }
                 logger.warning("Download failed with response code: " + responseCode);
                 return "下载失败，服务器响应码: " + responseCode;
             }
