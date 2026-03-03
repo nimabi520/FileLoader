@@ -18,6 +18,30 @@ import javax.net.ssl.*;
 public class BatchStatusService {
     private static final Logger logger = Logger.getLogger(BatchStatusService.class.getName());
 
+    public static class BatchStatusResult {
+        private final int code;
+        private final String msg;
+        private final boolean downloadable;
+
+        public BatchStatusResult(int code, String msg, boolean downloadable) {
+            this.code = code;
+            this.msg = msg;
+            this.downloadable = downloadable;
+        }
+
+        public int getCode() {
+            return code;
+        }
+
+        public String getMsg() {
+            return msg;
+        }
+
+        public boolean isDownloadable() {
+            return downloadable;
+        }
+    }
+
     private static SSLSocketFactory trustAllSslSocketFactory;
     private static HostnameVerifier trustAllHostnameVerifier;
 
@@ -46,12 +70,12 @@ public class BatchStatusService {
     }
 
     /**
-     * 查询指定批次的状态
+     * 查询指定批次的状态（GET /batch/{batchId}/batchStatus）
      *
      * @param batchId 批次ID
-     * @return 状态描述字符串：如"处理成功"、"处理失败"、"上传中"，出错时返回"查询失败: ..."
+     * @return 结构化状态结果，包含原始业务码、状态文案及是否可下载
      */
-    public static String fetchBatchStatus(String batchId) {
+    public static BatchStatusResult fetchBatchStatus(String batchId) {
         String encodedId = URLEncoder.encode(batchId.trim(), StandardCharsets.UTF_8);
         String urlStr = buildBaseUrl() + "batch/" + encodedId + "/batchStatus";
         logger.info("Querying batchStatus: " + urlStr);
@@ -63,16 +87,20 @@ public class BatchStatusService {
                 byte[] bytes = conn.getInputStream().readAllBytes();
                 String body = new String(bytes, StandardCharsets.UTF_8).trim();
                 logger.info("batchStatus response: " + body);
-                // 解析 JSON: {"code":0,"msg":"...","data":...}
-                // 简单提取 msg 字段内容作为状态描述
-                return parseMsg(body);
+                int bizCode = parseIntField(body, "code", -1);
+                String msg = parseStringField(body, "msg");
+                if (msg == null || msg.isBlank()) {
+                    msg = (bizCode == 0) ? "处理中或等待结果" : "状态未知";
+                }
+                boolean downloadable = resolveDownloadable(bizCode, msg);
+                return new BatchStatusResult(bizCode, msg, downloadable);
             } else {
                 logger.warning("batchStatus HTTP " + code + " for batchId=" + batchId);
-                return "查询失败 (HTTP " + code + ")";
+                return new BatchStatusResult(code, "查询失败 (HTTP " + code + ")", false);
             }
         } catch (Exception e) {
             logger.log(Level.WARNING, "batchStatus error", e);
-            return "查询异常: " + e.getMessage();
+            return new BatchStatusResult(-1, "查询异常: " + e.getMessage(), false);
         }
     }
 
@@ -146,36 +174,53 @@ public class BatchStatusService {
         return conn;
     }
 
-    /**
-     * 从简单 JSON 字符串中提取 msg 字段值
-     * 例: {"code":0,"msg":"处理成功","data":null} -> "处理成功"
-     */
-    private static String parseMsg(String json) {
-        // 尝试提取 "msg":"..." 的内容
-        int idx = json.indexOf("\"msg\"");
+    private static int parseIntField(String json, String field, int defaultValue) {
+        int idx = json.indexOf("\"" + field + "\"");
         if (idx < 0)
-            return json;
+            return defaultValue;
         int colon = json.indexOf(':', idx);
         if (colon < 0)
-            return json;
-        // 跳过空格
+            return defaultValue;
         int start = colon + 1;
         while (start < json.length() && (json.charAt(start) == ' ' || json.charAt(start) == '\t'))
             start++;
-        if (start >= json.length())
-            return json;
-        if (json.charAt(start) == '"') {
-            int end = json.indexOf('"', start + 1);
-            if (end > start)
-                return json.substring(start + 1, end);
-        } else {
-            // null or number
-            int end = json.indexOf(',', start);
-            if (end < 0)
-                end = json.indexOf('}', start);
-            if (end > start)
-                return json.substring(start, end).trim();
+        int end = start;
+        while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-'))
+            end++;
+        if (end <= start)
+            return defaultValue;
+        try {
+            return Integer.parseInt(json.substring(start, end));
+        } catch (NumberFormatException e) {
+            return defaultValue;
         }
-        return json;
+    }
+
+    private static String parseStringField(String json, String field) {
+        int idx = json.indexOf("\"" + field + "\"");
+        if (idx < 0)
+            return null;
+        int colon = json.indexOf(':', idx);
+        if (colon < 0)
+            return null;
+        int start = colon + 1;
+        while (start < json.length() && (json.charAt(start) == ' ' || json.charAt(start) == '\t'))
+            start++;
+        if (start >= json.length() || json.charAt(start) != '"')
+            return null;
+        int end = json.indexOf('"', start + 1);
+        if (end <= start)
+            return null;
+        return json.substring(start + 1, end).trim();
+    }
+
+    private static boolean resolveDownloadable(int bizCode, String msg) {
+        if (msg == null)
+            return false;
+        String lower = msg.toLowerCase();
+        boolean msgAllows = msg.contains("成功") || msg.contains("完成") || msg.contains("可下载")
+                || lower.contains("success") || lower.contains("finished") || lower.contains("done")
+                || lower.contains("ready") || lower.contains("download");
+        return bizCode == 0 && msgAllows;
     }
 }

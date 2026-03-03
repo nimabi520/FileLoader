@@ -27,7 +27,10 @@ public class MonitorUI {
     private DefaultTableModel uploadTableModel; // 上传记录表模型
     private DefaultTableModel batchStatusTableModel;
     private final Map<String, JProgressBar> progressBars = new ConcurrentHashMap<>(); // 文件名 -> 进度条
+    private final ConcurrentHashMap<String, Boolean> batchDownloadableFlags = new ConcurrentHashMap<>();
     private final Set<String> knownBatchIds = Collections.synchronizedSet(new LinkedHashSet<>());
+    private final ScheduledExecutorService batchRefreshScheduler = Executors.newSingleThreadScheduledExecutor();
+    private volatile ScheduledFuture<?> autoRefreshTask;
 
     // 业务模块
     private final FileMonitor fileMonitor;
@@ -161,6 +164,7 @@ public class MonitorUI {
             public void windowClosing(java.awt.event.WindowEvent e) {
                 fileMonitor.shutdown();
                 uploadExecutor.shutdown();
+                batchRefreshScheduler.shutdownNow();
                 try {
                     if (!uploadQueue.isEmpty()) {
                         addLog("等待队列清空，剩余文件: " + uploadQueue.size());
@@ -580,8 +584,8 @@ public class MonitorUI {
 
         // 共用渲染器：处理成功时显示对应按钮，否则显示灰色占位符
         javax.swing.table.TableCellRenderer actionRenderer = (tbl, value, isSelected, hasFocus, row, col) -> {
-            String status = (String) batchStatusTableModel.getValueAt(row, 1);
-            if (isDownloadable(status)) {
+            String batchId = (String) batchStatusTableModel.getValueAt(row, 0);
+            if (isDownloadable(batchId)) {
                 String label = (col == 2) ? "\u2b07 下载报告" : "\u2b07 下载异常";
                 JButton btn = new JButton(label);
                 btn.setFont(btn.getFont().deriveFont(11f));
@@ -602,10 +606,13 @@ public class MonitorUI {
                 int col = batchTable.columnAtPoint(e.getPoint());
                 if (row < 0 || (col != 2 && col != 3))
                     return;
-                String status = (String) batchStatusTableModel.getValueAt(row, 1);
-                if (!isDownloadable(status))
-                    return;
                 String batchId = (String) batchStatusTableModel.getValueAt(row, 0);
+                if (!isDownloadable(batchId)) {
+                    addLog("批次 " + batchId + " 当前不可下载，正在重新查询状态...");
+                    updateStatus("正在查询批次状态: " + batchId);
+                    refreshBatchStatus(batchId);
+                    return;
+                }
                 if (col == 2) {
                     downloadBatchResult(batchId); // /batch/{id}/batchResult
                 } else {
@@ -617,8 +624,18 @@ public class MonitorUI {
         JButton refreshBtn = new JButton("\u21bb 刷新状态");
         refreshBtn.addActionListener(e -> refreshAllBatchStatuses());
 
+        JComboBox<String> refreshIntervalBox = new JComboBox<>(new String[] {
+            "手动刷新", "每10秒", "每30秒", "每1分钟", "每5分钟"
+        });
+        refreshIntervalBox.addActionListener(e -> {
+            String selected = (String) refreshIntervalBox.getSelectedItem();
+            applyAutoRefreshInterval(selected);
+        });
+
         JPanel topBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         topBar.add(refreshBtn);
+        topBar.add(new JLabel("自动刷新:"));
+        topBar.add(refreshIntervalBox);
         topBar.add(new JLabel("处理成功后可分别下载汇总报告或异常文件"));
 
         panel.add(topBar, BorderLayout.NORTH);
@@ -629,10 +646,8 @@ public class MonitorUI {
     /**
      * 判断状态描述是否表示批次处理成功（报告可下载）
      */
-    private boolean isDownloadable(String status) {
-        if (status == null)
-            return false;
-        return status.contains("成功") || status.contains("完成") || status.toLowerCase().contains("success");
+    private boolean isDownloadable(String batchId) {
+        return Boolean.TRUE.equals(batchDownloadableFlags.get(batchId));
     }
 
     /**
@@ -679,20 +694,19 @@ public class MonitorUI {
         if (isNew) {
             SwingUtilities.invokeLater(() -> batchStatusTableModel.addRow(new Object[] { batchId, "查询中...", "", "" }));
             BatchDatabase.upsert(batchId, "查询中..."); // 持久化初始记录
+            batchDownloadableFlags.put(batchId, false);
         }
-        new Thread(() -> {
-            String status = BatchStatusService.fetchBatchStatus(batchId);
-            SwingUtilities.invokeLater(() -> updateBatchStatusRow(batchId, status));
-        }).start();
+        refreshBatchStatus(batchId);
     }
 
     /**
      * 在批次状态表格中找到对应行并更新状态列，同时持久化到数据库
      */
-    private void updateBatchStatusRow(String batchId, String status) {
+    private void updateBatchStatusRow(String batchId, String status, boolean downloadable) {
         for (int i = 0; i < batchStatusTableModel.getRowCount(); i++) {
             if (batchId.equals(batchStatusTableModel.getValueAt(i, 0))) {
                 batchStatusTableModel.setValueAt(status, i, 1);
+                batchDownloadableFlags.put(batchId, downloadable);
                 batchStatusTableModel.fireTableRowsUpdated(i, i);
                 BatchDatabase.updateStatus(batchId, status); // 持久化状态变更
                 return;
@@ -714,11 +728,47 @@ public class MonitorUI {
         }
         addLog("刷新 " + ids.size() + " 个批次的状态...");
         for (String batchId : ids) {
-            new Thread(() -> {
-                String status = BatchStatusService.fetchBatchStatus(batchId);
-                SwingUtilities.invokeLater(() -> updateBatchStatusRow(batchId, status));
-            }).start();
+            refreshBatchStatus(batchId);
         }
+    }
+
+    private void refreshBatchStatus(String batchId) {
+        new Thread(() -> {
+            BatchStatusService.BatchStatusResult result = BatchStatusService.fetchBatchStatus(batchId);
+            SwingUtilities.invokeLater(() -> {
+                updateBatchStatusRow(batchId, result.getMsg(), result.isDownloadable());
+                if (result.isDownloadable()) {
+                    addLog("批次 " + batchId + " 已可下载");
+                }
+            });
+        }).start();
+    }
+
+    private void applyAutoRefreshInterval(String selected) {
+        if (autoRefreshTask != null) {
+            autoRefreshTask.cancel(false);
+            autoRefreshTask = null;
+        }
+
+        long seconds = switch (selected) {
+            case "每10秒" -> 10;
+            case "每30秒" -> 30;
+            case "每1分钟" -> 60;
+            case "每5分钟" -> 300;
+            default -> 0;
+        };
+
+        if (seconds <= 0) {
+            addLog("已切换为手动刷新");
+            return;
+        }
+
+        addLog("已启用自动刷新，间隔: " + selected);
+        autoRefreshTask = batchRefreshScheduler.scheduleAtFixedRate(
+                this::refreshAllBatchStatuses,
+                seconds,
+                seconds,
+                TimeUnit.SECONDS);
     }
 
     /**
