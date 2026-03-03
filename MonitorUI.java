@@ -6,8 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -20,22 +19,24 @@ public class MonitorUI {
     // 存储当前正在监控的文件夹路径
     private final ConcurrentHashMap<Path, Boolean> monitoredFolders = new ConcurrentHashMap<>();
     private static final Logger logger = Logger.getLogger(MonitorUI.class.getName());
-    
+
     // UI 组件
-    private JTextArea folderListArea;  // 显示监控文件夹列表
-    private JTextArea logArea;         // 显示操作日志
-    private JLabel statusLabel;        // 底部状态栏标签
+    private JTextArea folderListArea; // 显示监控文件夹列表
+    private JTextArea logArea; // 显示操作日志
+    private JLabel statusLabel; // 底部状态栏标签
     private DefaultTableModel uploadTableModel; // 上传记录表模型
+    private DefaultTableModel batchStatusTableModel;
     private final Map<String, JProgressBar> progressBars = new ConcurrentHashMap<>(); // 文件名 -> 进度条
-    
+    private final Set<String> knownBatchIds = Collections.synchronizedSet(new LinkedHashSet<>());
+
     // 业务模块
     private final FileMonitor fileMonitor;
-    
+
     // 内部类：封装上传任务信息
     private static class UploadTask {
         final File file;
         final String batchId;
-        
+
         UploadTask(File file, String batchId) {
             this.file = file;
             this.batchId = batchId;
@@ -46,11 +47,11 @@ public class MonitorUI {
     private final BlockingQueue<UploadTask> uploadQueue = new LinkedBlockingQueue<>();
     // 固定大小的上传线程池
     private final ExecutorService uploadExecutor = Executors.newFixedThreadPool(3);
-    
+
     // 批次控制
     private volatile String currentBatchId = null;
     private volatile long batchStartTime = 0;
-    
+
     // 承载动态添加的进度条面板
     private final JPanel progressPanel;
 
@@ -60,8 +61,27 @@ public class MonitorUI {
     public MonitorUI() {
         this.fileMonitor = new FileMonitor(this);
         this.progressPanel = new JPanel();
+        BatchDatabase.init(); // 初始化本地 SQLite 数据库
         initializeUI();
+        loadBatchHistory(); // 从数据库恢复历史批次记录
         startUploadWorker();
+    }
+
+    /**
+     * 启动时从数据库加载所有历史批次，填充到批次状态面板
+     */
+    private void loadBatchHistory() {
+        java.util.List<BatchDatabase.BatchRecord> records = BatchDatabase.getAll();
+        if (records.isEmpty())
+            return;
+        SwingUtilities.invokeLater(() -> {
+            for (BatchDatabase.BatchRecord r : records) {
+                if (knownBatchIds.add(r.batchId)) { // 仅添加不重复的
+                    batchStatusTableModel.addRow(new Object[] { r.batchId, r.status, "", "" });
+                }
+            }
+        });
+        logger.info("从数据库恢复 " + records.size() + " 条历史批次记录");
     }
 
     /**
@@ -105,6 +125,7 @@ public class MonitorUI {
         JPanel listPanel = createListPanel();
         JPanel logPanel = createLogPanel();
         JPanel monitorPanel = createMonitorPanel();
+        JPanel batchStatusPanel = createBatchStatusPanel();
         JPanel statusPanel = createStatusPanel();
 
         progressPanel.setLayout(new BoxLayout(progressPanel, BoxLayout.Y_AXIS));
@@ -114,18 +135,20 @@ public class MonitorUI {
         // 右侧使用选项卡面板切换日志和监控记录
         JTabbedPane rightTabs = new JTabbedPane();
         rightTabs.addTab("监控记录", monitorPanel);
+        rightTabs.addTab("批次状态", batchStatusPanel);
         rightTabs.addTab("系统日志", logPanel);
 
         // 使用 JSplitPane 实现左右可拉伸布局
         JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, listPanel, rightTabs);
-        splitPane.setDividerLocation(300); 
-        splitPane.setResizeWeight(0.3); 
-        splitPane.setContinuousLayout(true); 
-        listPanel.setMinimumSize(new Dimension(200, 0)); 
-        // logPanel.setMinimumSize(new Dimension(200, 0)); // No longer direct child of splitPane 
+        splitPane.setDividerLocation(300);
+        splitPane.setResizeWeight(0.3);
+        splitPane.setContinuousLayout(true);
+        listPanel.setMinimumSize(new Dimension(200, 0));
+        // logPanel.setMinimumSize(new Dimension(200, 0)); // No longer direct child of
+        // splitPane
 
         panel.add(inputPanel, BorderLayout.NORTH);
-        panel.add(splitPane, BorderLayout.CENTER); 
+        panel.add(splitPane, BorderLayout.CENTER);
         panel.add(progressScrollPane, BorderLayout.SOUTH);
         panel.add(statusPanel, BorderLayout.SOUTH);
 
@@ -244,8 +267,8 @@ public class MonitorUI {
      */
     private JPanel createMonitorPanel() {
         JPanel monitorPanel = new JPanel(new BorderLayout());
-        
-        String[] columnNames = {"时间", "文件名", "批次ID", "状态"};
+
+        String[] columnNames = { "时间", "文件名", "批次ID", "状态" };
         uploadTableModel = new DefaultTableModel(columnNames, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -258,12 +281,12 @@ public class MonitorUI {
         table.getColumnModel().getColumn(1).setPreferredWidth(200); // 文件名
         table.getColumnModel().getColumn(2).setPreferredWidth(100); // 批次ID
         table.getColumnModel().getColumn(3).setPreferredWidth(100); // 状态
-        
+
         // 添加右键菜单
         JPopupMenu popupMenu = new JPopupMenu();
         JMenuItem downloadBatchItem = new JMenuItem("下载批次文件");
         JMenuItem downloadWrongItem = new JMenuItem("下载异常文件");
-        
+
         downloadBatchItem.addActionListener(e -> {
             int selectedRow = table.getSelectedRow();
             if (selectedRow >= 0) {
@@ -271,7 +294,7 @@ public class MonitorUI {
                 downloadBatchFiles(batchId, false);
             }
         });
-        
+
         downloadWrongItem.addActionListener(e -> {
             int selectedRow = table.getSelectedRow();
             if (selectedRow >= 0) {
@@ -279,11 +302,11 @@ public class MonitorUI {
                 downloadBatchFiles(batchId, true);
             }
         });
-        
+
         popupMenu.add(downloadBatchItem);
         popupMenu.add(downloadWrongItem);
         table.setComponentPopupMenu(popupMenu);
-        
+
         JScrollPane scrollPane = new JScrollPane(table);
         monitorPanel.add(scrollPane, BorderLayout.CENTER);
         return monitorPanel;
@@ -377,8 +400,7 @@ public class MonitorUI {
     public void updateFolderList() {
         SwingUtilities.invokeLater(() -> {
             folderListArea.setText("");
-            monitoredFolders.keySet().forEach(folder ->
-                    folderListArea.append(folder.toString() + "\n"));
+            monitoredFolders.keySet().forEach(folder -> folderListArea.append(folder.toString() + "\n"));
         });
     }
 
@@ -416,7 +438,7 @@ public class MonitorUI {
             addLog("错误: 文件不存在 " + filePath);
             return;
         }
-        
+
         String batchId;
         synchronized (this) {
             long now = System.currentTimeMillis();
@@ -446,7 +468,7 @@ public class MonitorUI {
             for (int i = 0; i < uploadTableModel.getRowCount(); i++) {
                 String rowBatchId = (String) uploadTableModel.getValueAt(i, 2);
                 String rowFileName = (String) uploadTableModel.getValueAt(i, 1);
-                
+
                 // 必须同时匹配批次ID和文件名
                 if (batchId.equals(rowBatchId) && fileName.equals(rowFileName)) {
                     // 如果已经是终态（成功/失败），且新状态也是终态，可能需要考虑是否覆盖？
@@ -467,10 +489,11 @@ public class MonitorUI {
         String batchId = task.batchId;
         String timeStr = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
 
-        // 添加记录到表格
+        // 添加记录到表格，并注册批次ID到批次状态面板
         SwingUtilities.invokeLater(() -> {
-            uploadTableModel.addRow(new Object[]{timeStr, fileName, batchId, "上传中..."});
+            uploadTableModel.addRow(new Object[] { timeStr, fileName, batchId, "上传中..." });
         });
+        registerBatchId(batchId);
 
         // 动态创建进度条组件
         JProgressBar progressBar = new JProgressBar();
@@ -481,7 +504,7 @@ public class MonitorUI {
         JPanel fileProgressPanel = new JPanel(new BorderLayout());
         fileProgressPanel.add(fileLabel, BorderLayout.WEST);
         fileProgressPanel.add(progressBar, BorderLayout.CENTER);
-        
+
         SwingUtilities.invokeLater(() -> {
             progressPanel.add(fileProgressPanel);
             progressPanel.revalidate();
@@ -528,6 +551,173 @@ public class MonitorUI {
                 progressPanel.repaint();
             });
             addLog("当前队列大小: " + uploadQueue.size());
+        }
+    }
+
+    /**
+     * 创建批次状态面板
+     * 展示每个批次的上传/处理状态，并在报告可下载时提供下载按钮
+     */
+    private JPanel createBatchStatusPanel() {
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+
+        // 四列：批次ID | 状态 | 下载报告（batchResult） | 下载异常（batchDownloadWithWrong）
+        String[] cols = { "批次ID", "状态", "下载报告", "下载异常" };
+        batchStatusTableModel = new DefaultTableModel(cols, 0) {
+            @Override
+            public boolean isCellEditable(int row, int col) {
+                return false;
+            }
+        };
+
+        JTable batchTable = new JTable(batchStatusTableModel);
+        batchTable.getColumnModel().getColumn(0).setPreferredWidth(150);
+        batchTable.getColumnModel().getColumn(1).setPreferredWidth(170);
+        batchTable.getColumnModel().getColumn(2).setPreferredWidth(100);
+        batchTable.getColumnModel().getColumn(3).setPreferredWidth(100);
+        batchTable.setRowHeight(28);
+
+        // 共用渲染器：处理成功时显示对应按钮，否则显示灰色占位符
+        javax.swing.table.TableCellRenderer actionRenderer = (tbl, value, isSelected, hasFocus, row, col) -> {
+            String status = (String) batchStatusTableModel.getValueAt(row, 1);
+            if (isDownloadable(status)) {
+                String label = (col == 2) ? "\u2b07 下载报告" : "\u2b07 下载异常";
+                JButton btn = new JButton(label);
+                btn.setFont(btn.getFont().deriveFont(11f));
+                return btn;
+            }
+            JLabel placeholder = new JLabel("—", SwingConstants.CENTER);
+            placeholder.setForeground(Color.LIGHT_GRAY);
+            return placeholder;
+        };
+        batchTable.getColumn("下载报告").setCellRenderer(actionRenderer);
+        batchTable.getColumn("下载异常").setCellRenderer(actionRenderer);
+
+        // 点击第3列 → 下载汇总报告；点击第4列 → 下载异常文件
+        batchTable.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                int row = batchTable.rowAtPoint(e.getPoint());
+                int col = batchTable.columnAtPoint(e.getPoint());
+                if (row < 0 || (col != 2 && col != 3))
+                    return;
+                String status = (String) batchStatusTableModel.getValueAt(row, 1);
+                if (!isDownloadable(status))
+                    return;
+                String batchId = (String) batchStatusTableModel.getValueAt(row, 0);
+                if (col == 2) {
+                    downloadBatchResult(batchId); // /batch/{id}/batchResult
+                } else {
+                    downloadBatchWrong(batchId); // /batch/{id}/batchDownloadWithWrong
+                }
+            }
+        });
+
+        JButton refreshBtn = new JButton("\u21bb 刷新状态");
+        refreshBtn.addActionListener(e -> refreshAllBatchStatuses());
+
+        JPanel topBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        topBar.add(refreshBtn);
+        topBar.add(new JLabel("处理成功后可分别下载汇总报告或异常文件"));
+
+        panel.add(topBar, BorderLayout.NORTH);
+        panel.add(new JScrollPane(batchTable), BorderLayout.CENTER);
+        return panel;
+    }
+
+    /**
+     * 判断状态描述是否表示批次处理成功（报告可下载）
+     */
+    private boolean isDownloadable(String status) {
+        if (status == null)
+            return false;
+        return status.contains("成功") || status.contains("完成") || status.toLowerCase().contains("success");
+    }
+
+    /**
+     * 下载批次汇总 Excel 报告（GET /batch/{id}/batchResult）
+     */
+    private void downloadBatchResult(String batchId) {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("选择保存目录");
+        if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
+            File saveDir = chooser.getSelectedFile();
+            addLog("开始下载批次 " + batchId + " 的汇总报告...");
+            new Thread(() -> {
+                String result = BatchStatusService.downloadBatchResult(batchId, saveDir);
+                addLog(result);
+                updateStatus(result);
+            }).start();
+        }
+    }
+
+    /**
+     * 下载批次异常文件压缩包（GET /batch/{id}/batchDownloadWithWrong）
+     */
+    private void downloadBatchWrong(String batchId) {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("选择保存目录");
+        if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
+            File saveDir = chooser.getSelectedFile();
+            addLog("开始下载批次 " + batchId + " 的异常文件...");
+            new Thread(() -> {
+                String result = DownloadService.downloadBatch(batchId, saveDir, true);
+                addLog(result);
+                updateStatus(result);
+            }).start();
+        }
+    }
+
+    /**
+     * 向批次状态面板注册一个批次ID：首次出现时新增行并写入数据库，然后异步查询最新状态
+     */
+    private void registerBatchId(String batchId) {
+        boolean isNew = knownBatchIds.add(batchId);
+        if (isNew) {
+            SwingUtilities.invokeLater(() -> batchStatusTableModel.addRow(new Object[] { batchId, "查询中...", "", "" }));
+            BatchDatabase.upsert(batchId, "查询中..."); // 持久化初始记录
+        }
+        new Thread(() -> {
+            String status = BatchStatusService.fetchBatchStatus(batchId);
+            SwingUtilities.invokeLater(() -> updateBatchStatusRow(batchId, status));
+        }).start();
+    }
+
+    /**
+     * 在批次状态表格中找到对应行并更新状态列，同时持久化到数据库
+     */
+    private void updateBatchStatusRow(String batchId, String status) {
+        for (int i = 0; i < batchStatusTableModel.getRowCount(); i++) {
+            if (batchId.equals(batchStatusTableModel.getValueAt(i, 0))) {
+                batchStatusTableModel.setValueAt(status, i, 1);
+                batchStatusTableModel.fireTableRowsUpdated(i, i);
+                BatchDatabase.updateStatus(batchId, status); // 持久化状态变更
+                return;
+            }
+        }
+    }
+
+    /**
+     * 刷新所有已知批次的状态（手动触发）
+     */
+    private void refreshAllBatchStatuses() {
+        java.util.List<String> ids;
+        synchronized (knownBatchIds) {
+            ids = new ArrayList<>(knownBatchIds);
+        }
+        if (ids.isEmpty()) {
+            addLog("暂无已知批次ID，刷新跳过");
+            return;
+        }
+        addLog("刷新 " + ids.size() + " 个批次的状态...");
+        for (String batchId : ids) {
+            new Thread(() -> {
+                String status = BatchStatusService.fetchBatchStatus(batchId);
+                SwingUtilities.invokeLater(() -> updateBatchStatusRow(batchId, status));
+            }).start();
         }
     }
 
