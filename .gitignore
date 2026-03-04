@@ -5,6 +5,10 @@ build/
 target/
 bin/
 
+# 本地依赖（运行时下载）
+lib/*.jar
+!lib/.gitkeep
+
 # IDE 配置文件
 .idea/
 *.iml
