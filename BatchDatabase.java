@@ -23,6 +23,7 @@ public class BatchDatabase {
     private static final String DB_FILE = "batches.db";
     private static final String JDBC_URL = "jdbc:sqlite:" + DB_FILE;
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static volatile boolean dbAvailable = false;
 
     /** 代表一条批次记录（只读数据载体） */
     public static class BatchRecord {
@@ -47,8 +48,10 @@ public class BatchDatabase {
         try {
             // 显式加载 sqlite-jdbc 驱动
             Class.forName("org.sqlite.JDBC");
+            dbAvailable = true;
         } catch (ClassNotFoundException e) {
-            logger.severe("sqlite-jdbc 驱动未找到，请确认 sqlite-jdbc-*.jar 在 classpath 中: " + e.getMessage());
+            dbAvailable = false;
+            logger.warning("sqlite-jdbc 驱动未找到，已降级为不持久化模式（不影响上传与状态查询）: " + e.getMessage());
             return;
         }
 
@@ -66,6 +69,7 @@ public class BatchDatabase {
                     """);
             logger.info("BatchDatabase 初始化完成，数据库文件: " + DB_FILE);
         } catch (SQLException e) {
+            dbAvailable = false;
             logger.log(Level.SEVERE, "BatchDatabase 初始化失败", e);
         }
     }
@@ -78,6 +82,8 @@ public class BatchDatabase {
      * @param status  当前状态文本
      */
     public static void upsert(String batchId, String status) {
+        if (!dbAvailable)
+            return;
         String now = LocalDateTime.now().format(FMT);
         String sql = """
                     INSERT INTO batch_records (batch_id, status, created_at, updated_at)
@@ -106,6 +112,8 @@ public class BatchDatabase {
      * @param status  新状态文本
      */
     public static void updateStatus(String batchId, String status) {
+        if (!dbAvailable)
+            return;
         String now = LocalDateTime.now().format(FMT);
         String sql = "UPDATE batch_records SET status=?, updated_at=? WHERE batch_id=?";
         try (Connection conn = connect();
@@ -126,6 +134,8 @@ public class BatchDatabase {
      */
     public static List<BatchRecord> getAll() {
         List<BatchRecord> list = new ArrayList<>();
+        if (!dbAvailable)
+            return list;
         String sql = "SELECT batch_id, status, created_at, updated_at FROM batch_records ORDER BY created_at DESC";
         try (Connection conn = connect();
                 Statement stmt = conn.createStatement();
