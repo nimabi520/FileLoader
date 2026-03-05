@@ -2,6 +2,15 @@
 
 欢迎使用文件自动上传系统！本工具可以帮助您自动将指定文件夹内的文件上传到服务器。即使您不熟悉电脑操作，只需按照以下简单步骤即可轻松使用。
 
+## 🎯 给老师直接使用（推荐）
+
+项目已提供可直接运行的单文件程序：`dist/FileLoader-standalone.jar`。
+
+- macOS / Windows：安装 Java 17+ 后可尝试直接双击 `FileLoader-standalone.jar`
+- 如果双击未启动：在终端执行 `java -jar dist/FileLoader-standalone.jar`
+
+> 说明：该 jar 已包含运行所需依赖（含 SQLite 驱动），可直接分发给老师使用。
+
 ## 🚀 第一步：启动程序
 
 1. 找到您下载并解压好的项目文件夹。
@@ -70,3 +79,22 @@
 ```bash
 chmod +x start-mac.command
 ```
+
+---
+
+## 🧱 开发者：重新打包单文件 jar
+
+如需重新生成可分发的可执行 jar，可在项目根目录执行：
+
+```bash
+rm -rf build dist
+mkdir -p build/classes dist
+javac -encoding UTF-8 -cp "lib/*" -d build/classes *.java
+for j in lib/*.jar; do [ -f "$j" ] && (cd build/classes && jar xf "../../$j"); done
+if [ -d build/classes/META-INF ]; then
+	find build/classes/META-INF -type f \( -name '*.SF' -o -name '*.RSA' -o -name '*.DSA' \) -delete
+fi
+jar cfe dist/FileLoader-standalone.jar MonitorUI -C build/classes .
+```
+
+生成产物：`dist/FileLoader-standalone.jar`
