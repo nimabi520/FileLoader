@@ -31,6 +31,7 @@ public class FileMonitor {
 
     /**
      * 构造函数
+     * 
      * @param ui 主界面对象
      */
     public FileMonitor(MonitorUI ui) {
@@ -39,6 +40,7 @@ public class FileMonitor {
 
     /**
      * 开始监控指定的文件夹
+     * 
      * @param folder 文件夹路径
      */
     public void startMonitoring(Path folder) {
@@ -53,7 +55,8 @@ public class FileMonitor {
         executorService.submit(() -> {
             try (WatchService watchService = FileSystems.getDefault().newWatchService()) {
                 // 注册创建和删除文件事件
-                folder.register(watchService, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_DELETE);
+                folder.register(watchService, StandardWatchEventKinds.ENTRY_CREATE,
+                        StandardWatchEventKinds.ENTRY_DELETE);
                 watchServices.put(folder, watchService);
 
                 // 初始化：扫描文件夹中已有的文件并触发上传
@@ -69,11 +72,14 @@ public class FileMonitor {
 
                 logger.info("Started monitoring folder: " + folder);
                 ui.addLog("开始监控文件夹: " + folder);
-                
+
+                // 重置该文件夹的批次绑定，确保使用全新批次
+                ui.resetFolderBatch(folder.toString());
+
                 // 处理所有现有文件的上传
                 if (!existingFilePaths.isEmpty()) {
                     ui.addLog("开始检测并上传现有文件，共 " + existingFilePaths.size() + " 个文件");
-                    existingFilePaths.forEach(this::handleNewFile);
+                    existingFilePaths.forEach(path -> handleNewFile(path, folder));
                 }
 
                 // 监控主循环
@@ -123,7 +129,7 @@ public class FileMonitor {
                     // 批量处理新文件
                     if (!newFiles.isEmpty()) {
                         Thread.sleep(1000); // 延迟1秒收集更多连续事件
-                        newFiles.forEach(this::handleNewFile);
+                        newFiles.forEach(path -> handleNewFile(path, folder));
                     }
                     // 重置监控键，若失效则退出
                     if (!key.reset()) {
@@ -150,9 +156,11 @@ public class FileMonitor {
 
     /**
      * 处理检测到的新文件，包含就绪检查（防止文件还在写入中就被上传）
-     * @param filePath 文件物理路径
+     * 
+     * @param filePath   文件物理路径
+     * @param folderPath 文件所属的监控文件夹路径
      */
-    private void handleNewFile(Path filePath) {
+    private void handleNewFile(Path filePath, Path folderPath) {
         // 原子性检查并设置处理状态
         if (checkingFiles.putIfAbsent(filePath, true) != null) {
             logger.info("File already being processed: " + filePath);
@@ -175,16 +183,17 @@ public class FileMonitor {
                 ui.addLog("检查文件就绪状态: " + filePath);
 
                 // 根据文件大小决定检查次数
-                int maxAttempts = Files.size(filePath) > 5_000_000 ? 20 : 10; 
+                int maxAttempts = Files.size(filePath) > 5_000_000 ? 20 : 10;
                 int stableCount = 0;
                 long lastSize = -1;
-                int existenceRetries = 5; 
+                int existenceRetries = 5;
 
                 for (int i = 0; i < maxAttempts; i++) {
                     // 处理文件可能被锁定或临时消失的情况
                     if (!Files.exists(filePath)) {
                         if (existenceRetries > 0) {
-                            logger.warning("File does not exist, retrying (" + existenceRetries + " attempts left): " + filePath);
+                            logger.warning("File does not exist, retrying (" + existenceRetries + " attempts left): "
+                                    + filePath);
                             ui.addLog("文件不存在，重试 (" + existenceRetries + " 次剩余): " + filePath);
                             existenceRetries--;
                             Thread.sleep(1000);
@@ -203,7 +212,8 @@ public class FileMonitor {
                     }
 
                     long currentSize = Files.size(filePath);
-                    logger.info("File size check [" + (i + 1) + "/" + maxAttempts + "]: " + filePath + ", size: " + currentSize);
+                    logger.info("File size check [" + (i + 1) + "/" + maxAttempts + "]: " + filePath + ", size: "
+                            + currentSize);
                     ui.addLog("文件大小检查 [" + (i + 1) + "/" + maxAttempts + "]: " + filePath + ", 大小: " + currentSize);
 
                     // 如果文件大小连续3次保持不变，认为文件已就绪
@@ -219,10 +229,11 @@ public class FileMonitor {
                     Thread.sleep(1000);
                 }
 
-                if (stableCount >= 3 && Files.exists(filePath) && Files.isReadable(filePath) && Files.size(filePath) > 0) {
+                if (stableCount >= 3 && Files.exists(filePath) && Files.isReadable(filePath)
+                        && Files.size(filePath) > 0) {
                     logger.info("File ready for upload: " + filePath);
                     ui.addLog("文件就绪，开始上传: " + filePath);
-                    ui.uploadFile(filePath.toString());
+                    ui.uploadFile(filePath.toString(), folderPath.toString());
                 } else {
                     logger.warning("File not ready or empty: " + filePath);
                     ui.addLog("文件未就绪或为空: " + filePath);
@@ -243,6 +254,7 @@ public class FileMonitor {
 
     /**
      * 停止监控指定的文件夹
+     * 
      * @param folder 文件夹路径
      */
     public void stopMonitoring(Path folder) {
