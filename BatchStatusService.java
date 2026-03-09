@@ -90,9 +90,14 @@ public class BatchStatusService {
                 int bizCode = parseIntField(body, "code", -1);
                 String msg = parseStringField(body, "msg");
                 if (msg == null || msg.isBlank()) {
-                    msg = (bizCode == 0) ? "处理中或等待结果" : "状态未知";
+                    msg = (bizCode == 200) ? "查询成功" : "状态未知";
                 }
-                boolean downloadable = resolveDownloadable(bizCode, msg);
+                int unprocessedFiles = parseIntField(body, "unprocessedFiles", -1);
+                int processingFiles = parseIntField(body, "processingFiles", -1);
+                int totalFiles = parseIntField(body, "totalFiles", -1);
+                boolean successFlag = parseBooleanField(body, "success");
+                boolean downloadable = resolveDownloadable(bizCode, successFlag, msg, unprocessedFiles, processingFiles,
+                        totalFiles);
                 return new BatchStatusResult(bizCode, msg, downloadable);
             } else {
                 logger.warning("batchStatus HTTP " + code + " for batchId=" + batchId);
@@ -214,13 +219,38 @@ public class BatchStatusService {
         return json.substring(start + 1, end).trim();
     }
 
-    private static boolean resolveDownloadable(int bizCode, String msg) {
+    private static boolean parseBooleanField(String json, String field) {
+        int idx = json.indexOf("\"" + field + "\"");
+        if (idx < 0)
+            return false;
+        int colon = json.indexOf(':', idx);
+        if (colon < 0)
+            return false;
+        int start = colon + 1;
+        while (start < json.length() && (json.charAt(start) == ' ' || json.charAt(start) == '\t'))
+            start++;
+        if (start + 4 <= json.length() && json.substring(start, start + 4).equalsIgnoreCase("true"))
+            return true;
+        if (start + 5 <= json.length() && json.substring(start, start + 5).equalsIgnoreCase("false"))
+            return false;
+        return false;
+    }
+
+    private static boolean resolveDownloadable(int bizCode, boolean successFlag, String msg,
+            int unprocessedFiles, int processingFiles, int totalFiles) {
+        boolean apiSuccess = (bizCode == 200) || successFlag;
+        // 如果响应里带了进度统计字段，优先按统计结果判断是否可下载。
+        // 条件：未处理文件 = 0，正在处理文件 = 0，总文件数 > 0
+        if (unprocessedFiles >= 0 && processingFiles >= 0 && totalFiles >= 0) {
+            return apiSuccess && unprocessedFiles == 0 && processingFiles == 0 && totalFiles > 0;
+        }
+        // 退回到 msg 文字匹配
         if (msg == null)
             return false;
         String lower = msg.toLowerCase();
-        boolean msgAllows = msg.contains("成功") || msg.contains("完成") || msg.contains("可下载")
-                || lower.contains("success") || lower.contains("finished") || lower.contains("done")
+        boolean msgAllows = msg.contains("完成") || msg.contains("可下载")
+                || lower.contains("finished") || lower.contains("done")
                 || lower.contains("ready") || lower.contains("download");
-        return bizCode == 0 && msgAllows;
+        return apiSuccess && msgAllows;
     }
 }

@@ -26,6 +26,7 @@ public class MonitorUI {
     private JLabel statusLabel; // 底部状态栏标签
     private DefaultTableModel uploadTableModel; // 上传记录表模型
     private DefaultTableModel batchStatusTableModel;
+    private JTable batchTable; // 批次状态表格
     private final Map<String, JProgressBar> progressBars = new ConcurrentHashMap<>(); // 文件名 -> 进度条
     private final ConcurrentHashMap<String, Boolean> batchDownloadableFlags = new ConcurrentHashMap<>();
     private final Set<String> knownBatchIds = Collections.synchronizedSet(new LinkedHashSet<>());
@@ -51,9 +52,8 @@ public class MonitorUI {
     // 固定大小的上传线程池
     private final ExecutorService uploadExecutor = Executors.newFixedThreadPool(3);
 
-    // 批次控制
-    private volatile String currentBatchId = null;
-    private volatile long batchStartTime = 0;
+    // 批次控制：每个文件夹对应一个批次ID（文件夹路径 -> batchId）
+    private final ConcurrentHashMap<String, String> folderBatchIds = new ConcurrentHashMap<>();
 
     // 承载动态添加的进度条面板
     private final JPanel progressPanel;
@@ -433,8 +433,11 @@ public class MonitorUI {
 
     /**
      * 提供给 FileMonitor 调用，通知有文件需要上传并加入队列
+     * 
+     * @param filePath   文件完整路径
+     * @param folderPath 文件所属的监控文件夹路径
      */
-    public void uploadFile(String filePath) {
+    public void uploadFile(String filePath, String folderPath) {
         File file = new File(filePath);
         if (!file.exists() || !file.isFile()) {
             logger.warning("File not found or invalid: " + filePath);
@@ -443,24 +446,25 @@ public class MonitorUI {
             return;
         }
 
-        String batchId;
-        synchronized (this) {
-            long now = System.currentTimeMillis();
-            // 如果在5秒内有新的文件到来，则重用当前的batchId
-            if (currentBatchId == null || (now - batchStartTime > 5000)) {
-                currentBatchId = String.valueOf(now);
-                batchStartTime = now;
-            }
-            batchId = currentBatchId;
-        }
+        // 同一文件夹的文件共用同一个批次ID，首个文件到达时生成
+        String batchId = folderBatchIds.computeIfAbsent(folderPath,
+                k -> String.valueOf(System.currentTimeMillis()));
 
         UploadTask task = new UploadTask(file, batchId);
         if (uploadQueue.offer(task)) {
-            addLog("已加入上传队列: " + file.getName() + " (批次: " + batchId + ", 队列大小: " + uploadQueue.size() + ")");
+            addLog("已加入上传队列: " + file.getName() + " (批次: " + batchId + ", 文件夹: " + folderPath + ", 队列大小: "
+                    + uploadQueue.size() + ")");
         } else {
             addLog("加入上传队列失败: " + file.getName());
             logger.warning("Failed to add file to upload queue: " + filePath);
         }
+    }
+
+    /**
+     * 重置指定文件夹的批次绑定，下次该文件夹有新文件时会创建新批次
+     */
+    public void resetFolderBatch(String folderPath) {
+        folderBatchIds.remove(folderPath);
     }
 
     /**
@@ -575,7 +579,7 @@ public class MonitorUI {
             }
         };
 
-        JTable batchTable = new JTable(batchStatusTableModel);
+        batchTable = new JTable(batchStatusTableModel);
         batchTable.getColumnModel().getColumn(0).setPreferredWidth(150);
         batchTable.getColumnModel().getColumn(1).setPreferredWidth(170);
         batchTable.getColumnModel().getColumn(2).setPreferredWidth(100);
@@ -625,7 +629,7 @@ public class MonitorUI {
         refreshBtn.addActionListener(e -> refreshAllBatchStatuses());
 
         JComboBox<String> refreshIntervalBox = new JComboBox<>(new String[] {
-            "手动刷新", "每10秒", "每30秒", "每1分钟", "每5分钟"
+                "手动刷新", "每10秒", "每30秒", "每1分钟", "每5分钟"
         });
         refreshIntervalBox.addActionListener(e -> {
             String selected = (String) refreshIntervalBox.getSelectedItem();
@@ -709,6 +713,10 @@ public class MonitorUI {
                 batchDownloadableFlags.put(batchId, downloadable);
                 batchStatusTableModel.fireTableRowsUpdated(i, i);
                 BatchDatabase.updateStatus(batchId, status); // 持久化状态变更
+                // 强制重绘表格以显示/更新下载按钮
+                if (batchTable != null) {
+                    batchTable.repaint();
+                }
                 return;
             }
         }

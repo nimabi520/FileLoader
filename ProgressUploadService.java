@@ -28,12 +28,18 @@ public class ProgressUploadService {
     static {
         try {
             // 创建信任所有证书的 TrustManager
-            TrustManager[] trustAllCerts = new TrustManager[]{
-                new X509TrustManager() {
-                    public X509Certificate[] getAcceptedIssuers() { return null; }
-                    public void checkClientTrusted(X509Certificate[] certs, String authType) { }
-                    public void checkServerTrusted(X509Certificate[] certs, String authType) { }
-                }
+            TrustManager[] trustAllCerts = new TrustManager[] {
+                    new X509TrustManager() {
+                        public X509Certificate[] getAcceptedIssuers() {
+                            return null;
+                        }
+
+                        public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                        }
+
+                        public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                        }
+                    }
             };
 
             // 安装信任所有证书的 SSLContext
@@ -51,8 +57,8 @@ public class ProgressUploadService {
     /**
      * 上传文件到服务器
      * 
-     * @param file 要上传的文件对象
-     * @param batchId 批次ID，如果为null则自动生成
+     * @param file             要上传的文件对象
+     * @param batchId          批次ID，如果为null则自动生成
      * @param progressCallback 进度回调函数，接收0-100的进度值
      * @return UploadResponse 上传响应对象，包含响应码和消息
      */
@@ -81,7 +87,8 @@ public class ProgressUploadService {
                     queryParams.append("userId=").append(java.net.URLEncoder.encode(userId, StandardCharsets.UTF_8));
                 }
                 if (batchId != null && !batchId.isEmpty()) {
-                    if (queryParams.length() > 0) queryParams.append("&");
+                    if (queryParams.length() > 0)
+                        queryParams.append("&");
                     queryParams.append("batchId=").append(java.net.URLEncoder.encode(batchId, StandardCharsets.UTF_8));
                 }
                 if (queryParams.length() > 0) {
@@ -92,7 +99,7 @@ public class ProgressUploadService {
 
                 // 创建HTTP连接
                 connection = (HttpURLConnection) url.openConnection();
-                
+
                 // 如果是 HTTPS 请求，配置忽略证书验证
                 if (connection instanceof HttpsURLConnection) {
                     HttpsURLConnection httpsConn = (HttpsURLConnection) connection;
@@ -108,7 +115,8 @@ public class ProgressUploadService {
                 connection.setReadTimeout(AppConfig.getReadTimeout() * 1000);
 
                 // 设置通用请求头，模拟浏览器行为防止被防火墙/WAF拦截
-                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                connection.setRequestProperty("User-Agent",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
                 connection.setRequestProperty("Accept", "*/*");
                 connection.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
                 connection.setRequestProperty("Connection", "keep-alive");
@@ -134,8 +142,8 @@ public class ProgressUploadService {
 
                 // 发送请求体
                 try (OutputStream outputStream = connection.getOutputStream();
-                     PrintWriter writer = new PrintWriter(
-                             new OutputStreamWriter(outputStream, StandardCharsets.UTF_8), true)) {
+                        PrintWriter writer = new PrintWriter(
+                                new OutputStreamWriter(outputStream, StandardCharsets.UTF_8), true)) {
 
                     // 构建文件的multipart头部
                     String fileHeader = "--" + boundary + "\r\n" +
@@ -164,10 +172,12 @@ public class ProgressUploadService {
                                 int toPrint = Math.min(256 - previewBytes, bytesRead);
                                 for (int i = 0; i < toPrint; i++) {
                                     System.out.printf("%02X ", buffer[i]);
-                                    if ((previewBytes + i + 1) % 16 == 0) System.out.print("\n");
+                                    if ((previewBytes + i + 1) % 16 == 0)
+                                        System.out.print("\n");
                                 }
                                 previewBytes += toPrint;
-                                if (previewBytes >= 256) System.out.println("\n...\n");
+                                if (previewBytes >= 256)
+                                    System.out.println("\n...\n");
                             }
                             // 计算上传进度百分比并回调
                             int progress = (int) ((uploadedBytes * 100) / totalSize);
@@ -200,11 +210,15 @@ public class ProgressUploadService {
                 UploadResponse response = new UploadResponse();
                 response.setCode(responseCode);
 
-                // 读取服务器返回的响应体
+                // 读取服务器返回的响应体（getErrorStream() 在某些错误响应下可能为 null，需防御处理）
+                InputStream bodyStream = (responseCode >= 400)
+                        ? connection.getErrorStream()
+                        : connection.getInputStream();
+                if (bodyStream == null) {
+                    bodyStream = new ByteArrayInputStream(new byte[0]);
+                }
                 try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(
-                                responseCode >= 400 ? connection.getErrorStream() : connection.getInputStream(),
-                                StandardCharsets.UTF_8))) {
+                        new InputStreamReader(bodyStream, StandardCharsets.UTF_8))) {
 
                     StringBuilder responseBody = new StringBuilder();
                     String line;
@@ -213,7 +227,7 @@ public class ProgressUploadService {
                     }
                     String responseText = responseBody.toString();
                     logger.info("服务器响应: " + responseText);
-                    response.setMessage(responseText);
+                    response.setMessage(responseText.isEmpty() ? "HTTP " + responseCode : responseText);
                 }
 
                 // 判断上传是否成功
