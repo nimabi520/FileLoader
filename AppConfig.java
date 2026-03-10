@@ -22,6 +22,9 @@ public class AppConfig {
     private static final int DEFAULT_READ_TIMEOUT = 60;
     private static final int DEFAULT_WRITE_TIMEOUT = 60;
 
+    // 默认文件过滤配置：false 表示不过滤（上传所有文件），true 表示只上传 PDF
+    private static final boolean DEFAULT_ONLY_UPLOAD_PDF = true;
+
     // 默认用户Id
     public static String userId = "20000381";
 
@@ -63,6 +66,7 @@ public class AppConfig {
         properties.setProperty("timeout.connect", String.valueOf(DEFAULT_CONNECT_TIMEOUT));
         properties.setProperty("timeout.read", String.valueOf(DEFAULT_READ_TIMEOUT));
         properties.setProperty("timeout.write", String.valueOf(DEFAULT_WRITE_TIMEOUT));
+        properties.setProperty("filter.onlyPdf", String.valueOf(DEFAULT_ONLY_UPLOAD_PDF));
     }
 
     // --- Getter 方法，如果配置不存在则返回默认值 ---
@@ -93,6 +97,21 @@ public class AppConfig {
      */
     public static int getWriteTimeout() {
         return Integer.parseInt(properties.getProperty("timeout.write", String.valueOf(DEFAULT_WRITE_TIMEOUT)));
+    }
+
+    /**
+     * 获取是否只上传 PDF 文件的配置
+     */
+    public static boolean isOnlyUploadPdf() {
+        return Boolean.parseBoolean(properties.getProperty("filter.onlyPdf", String.valueOf(DEFAULT_ONLY_UPLOAD_PDF)));
+    }
+
+    /**
+     * 设置并保存“仅上传 PDF”开关
+     */
+    public static void setOnlyUploadPdf(boolean value) {
+        properties.setProperty("filter.onlyPdf", String.valueOf(value));
+        saveConfig();
     }
 
     // --- Setter 方法，修改后自动保存 ---
