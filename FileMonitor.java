@@ -176,6 +176,17 @@ public class FileMonitor {
             return;
         }
 
+        // PDF 过滤：如果开启"仅上传 PDF"，则跳过非 PDF 文件
+        if (AppConfig.isOnlyUploadPdf()) {
+            String fileName = filePath.getFileName().toString().toLowerCase();
+            if (!fileName.endsWith(".pdf")) {
+                logger.info("Skipping non-PDF file (filter enabled): " + filePath);
+                ui.addLog("跳过非 PDF 文件（过滤已启用）: " + filePath.getFileName());
+                checkingFiles.remove(filePath);
+                return;
+            }
+        }
+
         // 在单独的线程中检查文件是否写入完毕
         executorService.submit(() -> {
             try {

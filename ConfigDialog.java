@@ -10,11 +10,13 @@ public class ConfigDialog extends JDialog {
     private JTextField serverUrlField;
     private JTextField connectTimeoutField;
     private JTextField readTimeoutField;
+    private JCheckBox onlyPdfCheckBox;
     // 标记配置是否已更改
     private boolean configChanged = false;
 
     /**
      * 构造函数
+     * 
      * @param parent 父窗口句柄
      */
     public ConfigDialog(JFrame parent) {
@@ -37,25 +39,50 @@ public class ConfigDialog extends JDialog {
         gbc.anchor = GridBagConstraints.WEST;
 
         // 服务器地址输入项
-        gbc.gridx = 0; gbc.gridy = 0;
+        gbc.gridx = 0;
+        gbc.gridy = 0;
         mainPanel.add(new JLabel("服务器地址:"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
         serverUrlField = new JTextField(30);
         mainPanel.add(serverUrlField, gbc);
 
         // 连接超时输入项
-        gbc.gridx = 0; gbc.gridy = 1; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0.0;
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0.0;
         mainPanel.add(new JLabel("连接超时时间设置(秒):"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
         connectTimeoutField = new JTextField(5);
         mainPanel.add(connectTimeoutField, gbc);
 
         // 读写超时输入项
-        gbc.gridx = 0; gbc.gridy = 2; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0.0;
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0.0;
         mainPanel.add(new JLabel("读写超时时间设置(秒):"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
         readTimeoutField = new JTextField(5);
         mainPanel.add(readTimeoutField, gbc);
+
+        // 仅上传 PDF 过滤选项
+        gbc.gridx = 0;
+        gbc.gridy = 3;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0.0;
+        mainPanel.add(new JLabel("文件过滤:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        onlyPdfCheckBox = new JCheckBox("仅上传 PDF 文件");
+        mainPanel.add(onlyPdfCheckBox, gbc);
 
         // 按钮栏
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
@@ -93,10 +120,12 @@ public class ConfigDialog extends JDialog {
         serverUrlField.setText(AppConfig.getServerUrl());
         connectTimeoutField.setText(String.valueOf(AppConfig.getConnectTimeout()));
         readTimeoutField.setText(String.valueOf(AppConfig.getReadTimeout()));
+        onlyPdfCheckBox.setSelected(AppConfig.isOnlyUploadPdf());
     }
 
     /**
      * 保存UI中的配置到配置文件
+     * 
      * @return 是否保存成功
      */
     private boolean saveConfig() {
@@ -122,6 +151,7 @@ public class ConfigDialog extends JDialog {
             AppConfig.properties.setProperty("timeout.connect", String.valueOf(connectTimeout));
             AppConfig.properties.setProperty("timeout.read", String.valueOf(readTimeout));
             AppConfig.saveConfig();
+            AppConfig.setOnlyUploadPdf(onlyPdfCheckBox.isSelected());
 
             JOptionPane.showMessageDialog(this, "配置已保存并生效", "成功", JOptionPane.INFORMATION_MESSAGE);
             return true;
