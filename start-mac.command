@@ -22,7 +22,20 @@ if ! command -v javac >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p bin
+mkdir -p bin lib
+
+SQLITE_JAR="${SCRIPT_DIR}/lib/sqlite-jdbc.jar"
+if [ ! -f "$SQLITE_JAR" ]; then
+  echo "[FileLoader] 未检测到 sqlite-jdbc 驱动，正在自动下载..."
+  SQLITE_URL="https://maven.aliyun.com/repository/central/org/xerial/sqlite-jdbc/3.46.1.3/sqlite-jdbc-3.46.1.3.jar"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$SQLITE_JAR" "$SQLITE_URL" && echo "[FileLoader] sqlite-jdbc 驱动下载成功。" || echo "[FileLoader] 警告: sqlite-jdbc 驱动下载失败，将以不持久化模式运行。"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$SQLITE_JAR" "$SQLITE_URL" && echo "[FileLoader] sqlite-jdbc 驱动下载成功。" || echo "[FileLoader] 警告: sqlite-jdbc 驱动下载失败，将以不持久化模式运行。"
+  else
+    echo "[FileLoader] 警告: 未找到 curl/wget，无法自动下载 sqlite-jdbc 驱动，将以不持久化模式运行。"
+  fi
+fi
 
 echo "[FileLoader] 正在编译 Java 源码..."
 find . -maxdepth 1 -name "*.java" -print0 | xargs -0 javac -encoding UTF-8 -cp "lib/*" -d bin

@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 setlocal enabledelayedexpansion
 cd /d %~dp0
 
@@ -19,6 +20,19 @@ if errorlevel 1 (
 )
 
 if not exist bin mkdir bin
+if not exist lib mkdir lib
+
+set SQLITE_JAR=lib\sqlite-jdbc.jar
+if not exist "%SQLITE_JAR%" (
+  echo [FileLoader] 未检测到 sqlite-jdbc 驱动，正在自动下载...
+  set SQLITE_URL=https://maven.aliyun.com/repository/central/org/xerial/sqlite-jdbc/3.46.1.3/sqlite-jdbc-3.46.1.3.jar
+  powershell -Command "Invoke-WebRequest -Uri '!SQLITE_URL!' -OutFile '%SQLITE_JAR%'" >nul 2>nul
+  if exist "%SQLITE_JAR%" (
+    echo [FileLoader] sqlite-jdbc 驱动下载成功。
+  ) else (
+    echo [FileLoader] 警告: sqlite-jdbc 驱动下载失败，将以不持久化模式运行。
+  )
+)
 
 echo [FileLoader] 正在编译 Java 源码...
 set SOURCES=
