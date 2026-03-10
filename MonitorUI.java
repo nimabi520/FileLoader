@@ -80,7 +80,7 @@ public class MonitorUI {
         SwingUtilities.invokeLater(() -> {
             for (BatchDatabase.BatchRecord r : records) {
                 if (knownBatchIds.add(r.batchId)) { // 仅添加不重复的
-                    batchStatusTableModel.addRow(new Object[] { r.batchId, r.status, "", "" });
+                    batchStatusTableModel.addRow(new Object[] { r.batchId, r.status, "", "", "", "", "" });
                 }
             }
         });
@@ -570,8 +570,8 @@ public class MonitorUI {
         JPanel panel = new JPanel(new BorderLayout(5, 5));
         panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
 
-        // 四列：批次ID | 状态 | 下载报告（batchResult） | 下载异常（batchDownloadWithWrong）
-        String[] cols = { "批次ID", "状态", "下载报告", "下载异常" };
+        // 七列：批次ID | 状态 | 下载报告（batchResult） | 下载异常（batchDownloadWithWrong）｜未处理文件数｜处理中数量｜总文件数
+        String[] cols = { "批次ID", "状态", "下载报告", "下载异常","未处理文件","处理中文件","总文件数" };
         batchStatusTableModel = new DefaultTableModel(cols, 0) {
             @Override
             public boolean isCellEditable(int row, int col) {
@@ -696,7 +696,7 @@ public class MonitorUI {
     private void registerBatchId(String batchId) {
         boolean isNew = knownBatchIds.add(batchId);
         if (isNew) {
-            SwingUtilities.invokeLater(() -> batchStatusTableModel.addRow(new Object[] { batchId, "查询中...", "", "" }));
+            SwingUtilities.invokeLater(() -> batchStatusTableModel.addRow(new Object[] { batchId, "查询中...", "", "", "", "", "" }));
             BatchDatabase.upsert(batchId, "查询中..."); // 持久化初始记录
             batchDownloadableFlags.put(batchId, false);
         }
@@ -706,10 +706,13 @@ public class MonitorUI {
     /**
      * 在批次状态表格中找到对应行并更新状态列，同时持久化到数据库
      */
-    private void updateBatchStatusRow(String batchId, String status, boolean downloadable) {
+    private void updateBatchStatusRow(String batchId, String status, boolean downloadable, int unprocessedCount, int processingCount, int totalCount) {
         for (int i = 0; i < batchStatusTableModel.getRowCount(); i++) {
             if (batchId.equals(batchStatusTableModel.getValueAt(i, 0))) {
                 batchStatusTableModel.setValueAt(status, i, 1);
+                batchStatusTableModel.setValueAt(unprocessedCount, i, 4);
+                batchStatusTableModel.setValueAt(processingCount, i, 5);
+                batchStatusTableModel.setValueAt(totalCount, i, 6);
                 batchDownloadableFlags.put(batchId, downloadable);
                 batchStatusTableModel.fireTableRowsUpdated(i, i);
                 BatchDatabase.updateStatus(batchId, status); // 持久化状态变更
@@ -744,7 +747,8 @@ public class MonitorUI {
         new Thread(() -> {
             BatchStatusService.BatchStatusResult result = BatchStatusService.fetchBatchStatus(batchId);
             SwingUtilities.invokeLater(() -> {
-                updateBatchStatusRow(batchId, result.getMsg(), result.isDownloadable());
+                updateBatchStatusRow(batchId, result.getMsg(), result.isDownloadable(),
+                        result.getUnprocessedFiles(), result.getProcessingFiles(), result.getTotalFiles());
                 if (result.isDownloadable()) {
                     addLog("批次 " + batchId + " 已可下载");
                 }
