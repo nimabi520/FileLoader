@@ -22,11 +22,18 @@ public class BatchStatusService {
         private final int code;
         private final String msg;
         private final boolean downloadable;
+        private final int unprocessedFiles;
+        private final int processingFiles;
+        private final int totalFiles;
 
-        public BatchStatusResult(int code, String msg, boolean downloadable) {
+        public BatchStatusResult(int code, String msg, boolean downloadable, int unprocessedFiles, int processingFiles, int totalFiles) {
             this.code = code;
             this.msg = msg;
             this.downloadable = downloadable;
+            this.unprocessedFiles = unprocessedFiles;
+            this.processingFiles = processingFiles;
+            this.totalFiles = totalFiles;
+
         }
 
         public int getCode() {
@@ -39,6 +46,18 @@ public class BatchStatusService {
 
         public boolean isDownloadable() {
             return downloadable;
+        }
+
+        public int getUnprocessedFiles() {
+            return unprocessedFiles;
+        }
+
+        public int getProcessingFiles() {
+            return processingFiles;
+        }
+
+        public int getTotalFiles() {
+            return totalFiles;
         }
     }
 
@@ -98,14 +117,14 @@ public class BatchStatusService {
                 boolean successFlag = parseBooleanField(body, "success");
                 boolean downloadable = resolveDownloadable(bizCode, successFlag, msg, unprocessedFiles, processingFiles,
                         totalFiles);
-                return new BatchStatusResult(bizCode, msg, downloadable);
+                return new BatchStatusResult(bizCode, msg, downloadable, unprocessedFiles, processingFiles, totalFiles);
             } else {
                 logger.warning("batchStatus HTTP " + code + " for batchId=" + batchId);
-                return new BatchStatusResult(code, "查询失败 (HTTP " + code + ")", false);
+                return new BatchStatusResult(code, "查询失败 (HTTP " + code + ")", false, -1, -1, -1);
             }
         } catch (Exception e) {
             logger.log(Level.WARNING, "batchStatus error", e);
-            return new BatchStatusResult(-1, "查询异常: " + e.getMessage(), false);
+            return new BatchStatusResult(-1, "查询异常: " + e.getMessage(), false, -1, -1, -1);
         }
     }
 
