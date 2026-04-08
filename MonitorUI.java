@@ -3,6 +3,7 @@ package topview.fileloader;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.FileDialog;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -212,14 +213,16 @@ public class MonitorUI implements MonitorCallbacks {
             }
         });
 
-        // 浏览对话框
+        // 浏览对话框 - 使用系统原生文件选择器
         browseButton.addActionListener(e -> {
-            JFileChooser chooser = new JFileChooser();
-            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-            chooser.setDialogTitle("选择要监控的文件夹");
-            if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
-                String path = chooser.getSelectedFile().getAbsolutePath();
-                folderPathField.setText(path);
+            System.setProperty("apple.awt.fileDialogForDirectories", "true");
+            FileDialog dialog = new FileDialog(frame, "选择要监控的文件夹", FileDialog.LOAD);
+            dialog.setVisible(true);
+            String file = dialog.getFile();
+            String directory = dialog.getDirectory();
+            if (directory != null) {
+                File selectedDir = (file != null) ? new File(directory, file) : new File(directory);
+                folderPathField.setText(selectedDir.getAbsolutePath());
             }
         });
 
@@ -311,11 +314,13 @@ public class MonitorUI implements MonitorCallbacks {
      * 下载批次文件
      */
     private void downloadBatchFiles(String batchId, boolean withWrong) {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        chooser.setDialogTitle("选择保存目录");
-        if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
-            File saveDir = chooser.getSelectedFile();
+        System.setProperty("apple.awt.fileDialogForDirectories", "true");
+        FileDialog dialog = new FileDialog((Frame) null, "选择保存目录", FileDialog.LOAD);
+        dialog.setVisible(true);
+        String file = dialog.getFile();
+        String directory = dialog.getDirectory();
+        if (directory != null) {
+            File saveDir = (file != null) ? new File(directory, file) : new File(directory);
             addLog("开始下载批次 " + batchId + (withWrong ? " 的异常文件" : " 的文件") + "...");
             new Thread(() -> {
                 String result = DownloadService.downloadBatch(batchId, saveDir, withWrong);
@@ -661,11 +666,13 @@ public class MonitorUI implements MonitorCallbacks {
      * 下载批次汇总 Excel 报告（GET /batch/{id}/batchResult）
      */
     private void downloadBatchResult(String batchId) {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        chooser.setDialogTitle("选择保存目录");
-        if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
-            File saveDir = chooser.getSelectedFile();
+        System.setProperty("apple.awt.fileDialogForDirectories", "true");
+        FileDialog dialog = new FileDialog((Frame) null, "选择保存目录", FileDialog.LOAD);
+        dialog.setVisible(true);
+        String file = dialog.getFile();
+        String directory = dialog.getDirectory();
+        if (directory != null) {
+            File saveDir = (file != null) ? new File(directory, file) : new File(directory);
             addLog("开始下载批次 " + batchId + " 的汇总报告...");
             new Thread(() -> {
                 String result = BatchStatusService.downloadBatchResult(batchId, saveDir);
@@ -679,11 +686,13 @@ public class MonitorUI implements MonitorCallbacks {
      * 下载批次异常文件压缩包（GET /batch/{id}/batchDownloadWithWrong）
      */
     private void downloadBatchWrong(String batchId) {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        chooser.setDialogTitle("选择保存目录");
-        if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
-            File saveDir = chooser.getSelectedFile();
+        System.setProperty("apple.awt.fileDialogForDirectories", "true");
+        FileDialog dialog = new FileDialog((Frame) null, "选择保存目录", FileDialog.LOAD);
+        dialog.setVisible(true);
+        String file = dialog.getFile();
+        String directory = dialog.getDirectory();
+        if (directory != null) {
+            File saveDir = (file != null) ? new File(directory, file) : new File(directory);
             addLog("开始下载批次 " + batchId + " 的异常文件...");
             new Thread(() -> {
                 String result = DownloadService.downloadBatch(batchId, saveDir, true);

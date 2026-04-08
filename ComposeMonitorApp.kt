@@ -78,7 +78,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 import java.util.logging.Logger
-import javax.swing.JFileChooser
+import java.awt.FileDialog
+import java.awt.Frame
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
 
@@ -565,10 +566,20 @@ private class ComposeMonitorStore : MonitorCallbacks {
     }
 
     private fun chooseDirectory(title: String): File? {
-        val chooser = JFileChooser()
-        chooser.fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
-        chooser.dialogTitle = title
-        return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+        // 使用FileDialog获得原生文件选择器体验
+        // 在macOS上需要设置系统属性才能选择目录
+        System.setProperty("apple.awt.fileDialogForDirectories", "true")
+        val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD)
+        dialog.isVisible = true
+        val file = dialog.file
+        val directory = dialog.directory
+        return if (file != null && directory != null) {
+            File(directory, file)
+        } else if (directory != null) {
+            File(directory)
+        } else {
+            null
+        }
     }
 }
 
