@@ -11,6 +11,15 @@
 
 > 说明：该 jar 已包含运行所需依赖（含 SQLite 驱动），可直接分发给老师使用。
 
+## 🧪 开发版（Compose 迁移阶段）
+
+项目已切换到 Compose Desktop 前端重写阶段，新增了 Gradle 启动方式：
+
+- 启动 Compose 迁移界面：`./gradlew run`
+- 启动旧版 Swing 主界面：`./gradlew runSwing`
+
+如果本机未安装 Gradle，可直接使用项目自带的 wrapper（`gradlew` / `gradlew.bat`）。
+
 ## 🚀 第一步：启动程序
 
 1. 找到您下载并解压好的项目文件夹。
@@ -68,9 +77,9 @@
 
 脚本会自动执行以下步骤：
 
-1. 检查 `java` / `javac` 是否可用（需 JDK 17+）
-2. 编译当前目录下所有 `*.java` 到 `bin` 目录
-3. 自动带上 `lib/*.jar` 依赖后台启动 `MonitorUI`
+1. 检查 `java` 是否可用（需 JDK 17+）
+2. 优先使用项目内 `gradlew`（不存在时回退系统 `gradle`）
+3. 通过 `gradle run` 后台启动 Compose 迁移界面
 
 启动完成后命令行窗口会自动关闭，不影响主程序继续运行。
 
@@ -94,7 +103,7 @@ for j in lib/*.jar; do [ -f "$j" ] && (cd build/classes && jar xf "../../$j"); d
 if [ -d build/classes/META-INF ]; then
 	find build/classes/META-INF -type f \( -name '*.SF' -o -name '*.RSA' -o -name '*.DSA' \) -delete
 fi
-jar cfe dist/FileLoader-standalone.jar MonitorUI -C build/classes .
+jar cfe dist/FileLoader-standalone.jar topview.fileloader.MonitorUI -C build/classes .
 ```
 
 生成产物：`dist/FileLoader-standalone.jar`

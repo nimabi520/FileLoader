@@ -1,3 +1,5 @@
+package topview.fileloader;
+
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.HashSet;
@@ -25,7 +27,7 @@ public class FileMonitor {
     // 用于执行监控和文件检查任务的线程池
     private final ExecutorService executorService = Executors.newFixedThreadPool(5);
     // UI 句柄，用于输出日志和更新状态
-    private final MonitorUI ui;
+    private final MonitorCallbacks ui;
     // 停机标志位
     private volatile boolean isShutdown = false;
 
@@ -34,7 +36,7 @@ public class FileMonitor {
      * 
      * @param ui 主界面对象
      */
-    public FileMonitor(MonitorUI ui) {
+    public FileMonitor(MonitorCallbacks ui) {
         this.ui = ui;
     }
 

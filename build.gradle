@@ -1,0 +1,92 @@
+plugins {
+    id 'java'
+    id 'org.jetbrains.kotlin.jvm' version '1.9.24'
+    id 'org.jetbrains.compose' version '1.6.11'
+}
+
+group = 'topview.fileloader'
+version = '0.1.0'
+
+repositories {
+    google()
+    mavenCentral()
+    maven {
+        url 'https://maven.pkg.jetbrains.space/public/p/compose/dev'
+    }
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = []
+        }
+        kotlin {
+            srcDirs = ['.']
+            include '*.kt'
+        }
+        compileClasspath += files(layout.buildDirectory.dir('backend-classes'))
+        runtimeClasspath += files(layout.buildDirectory.dir('backend-classes'))
+        output.dir(layout.buildDirectory.dir('backend-classes'), builtBy: 'compileBackendJava')
+    }
+    test {
+        java {
+            srcDirs = ['src/test/java']
+        }
+        kotlin {
+            srcDirs = ['src/test/kotlin']
+        }
+    }
+}
+
+dependencies {
+    implementation compose.desktop.currentOs
+    implementation compose.material3
+    implementation fileTree(dir: 'lib', include: ['*.jar'])
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+compose.desktop {
+    application {
+        mainClass = 'topview.fileloader.ComposeMonitorAppKt'
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('compileBackendJava', JavaCompile) {
+    source = fileTree('.') {
+        include '*.java'
+    }
+    classpath = files(fileTree(dir: 'lib', include: ['*.jar']))
+    destinationDirectory = layout.buildDirectory.dir('backend-classes')
+    sourceCompatibility = '17'
+    targetCompatibility = '17'
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    kotlinOptions.jvmTarget = '17'
+}
+
+tasks.named('compileKotlin') {
+    dependsOn tasks.named('compileBackendJava')
+}
+
+tasks.test {
+    useJUnitPlatform()
+}
+
+tasks.register('runSwing', JavaExec) {
+    group = 'application'
+    description = 'Run the legacy Swing MonitorUI entrypoint.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'topview.fileloader.MonitorUI'
+}
