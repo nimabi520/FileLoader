@@ -13,6 +13,7 @@ lib/*.jar
 .idea/
 *.iml
 .vscode/
+.gradle/
 
 # 日志文件
 *.log

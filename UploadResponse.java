@@ -1,3 +1,5 @@
+package topview.fileloader;
+
 /**
  * 上传接口响应数据模型
  * 映射服务器返回的 JSON 结构

@@ -1,3 +1,5 @@
+package topview.fileloader;
+
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
@@ -15,7 +17,7 @@ import java.util.logging.Logger;
  * 监控程序主界面类
  * 负责 UI 初始化、事件处理以及管理上传队列和工作线程
  */
-public class MonitorUI {
+public class MonitorUI implements MonitorCallbacks {
     // 存储当前正在监控的文件夹路径
     private final ConcurrentHashMap<Path, Boolean> monitoredFolders = new ConcurrentHashMap<>();
     private static final Logger logger = Logger.getLogger(MonitorUI.class.getName());
@@ -192,7 +194,6 @@ public class MonitorUI {
         JButton removeButton = new JButton("移除选中文件夹");
         JButton browseButton = new JButton("浏览...");
         JButton configButton = new JButton("配置");
-        JButton diagnoseButton = new JButton("诊断");
 
         // 事件响应：添加文件夹
         addButton.addActionListener(e -> {
@@ -231,22 +232,12 @@ public class MonitorUI {
             }
         });
 
-        // 启动独立线程进行服务诊断
-        diagnoseButton.addActionListener(e -> {
-            new Thread(() -> {
-                addLog("开始服务器诊断...");
-                ServerDiagnostic.diagnoseServer(AppConfig.getServerUrl());
-                addLog("服务器诊断完成，请查看控制台输出");
-            }).start();
-        });
-
         inputPanel.add(new JLabel("文件夹路径:"));
         inputPanel.add(folderPathField);
         inputPanel.add(addButton);
         inputPanel.add(browseButton);
         inputPanel.add(removeButton);
         inputPanel.add(configButton);
-        inputPanel.add(diagnoseButton);
 
         return inputPanel;
     }
@@ -411,6 +402,7 @@ public class MonitorUI {
     /**
      * 更新状态栏文字
      */
+    @Override
     public void updateStatus(String status) {
         SwingUtilities.invokeLater(() -> {
             if (statusLabel != null) {
@@ -422,6 +414,7 @@ public class MonitorUI {
     /**
      * 向日志区域追加一条记录
      */
+    @Override
     public void addLog(String message) {
         SwingUtilities.invokeLater(() -> {
             if (logArea != null) {
@@ -437,6 +430,16 @@ public class MonitorUI {
      * @param filePath   文件完整路径
      * @param folderPath 文件所属的监控文件夹路径
      */
+    @Override
+    public void uploadFile(String filePath) {
+        File file = new File(filePath);
+        String folderPath = file.getParent();
+        if (folderPath == null) {
+            folderPath = "";
+        }
+        uploadFile(filePath, folderPath);
+    }
+
     public void uploadFile(String filePath, String folderPath) {
         File file = new File(filePath);
         if (!file.exists() || !file.isFile()) {

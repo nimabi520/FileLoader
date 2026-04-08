@@ -1,3 +1,5 @@
+package topview.fileloader;
+
 public class DownloadResponse {
      private int code;
 
