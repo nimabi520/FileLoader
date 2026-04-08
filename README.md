@@ -18,6 +18,25 @@
 - 启动 Compose 迁移界面：`./gradlew run`
 - 启动旧版 Swing 主界面：`./gradlew runSwing`
 
+## 🪟 Windows EXE 打包（新入口）
+
+项目已增加 EXE 专用入口类：`topview.fileloader.ExeMainKt`。
+
+- 默认行为：启动 Compose 界面
+- 兼容参数：`--ui=swing` 或 `--swing` 可切换到旧版 Swing 界面
+
+在 Windows 机器执行：
+
+```bash
+gradlew.bat packageReleaseExe
+```
+
+生成产物默认位于：
+
+- `build/compose/binaries/main-release/exe/`
+
+> 说明：`exe` 需要在 Windows 环境下打包（由 `jpackage` 生成）。
+
 如果本机未安装 Gradle，可直接使用项目自带的 wrapper（`gradlew` / `gradlew.bat`）。
 
 ## 🚀 第一步：启动程序
