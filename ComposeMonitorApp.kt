@@ -1013,7 +1013,7 @@ private fun LogTab(store: ComposeMonitorStore) {
     }
 }
 
-fun main() = application {
+fun startComposeApp() = application {
     println("[ComposeMonitorApp] Compose UI started.")
     val store = remember { ComposeMonitorStore() }
 
@@ -1035,3 +1035,5 @@ fun main() = application {
         }
     }
 }
+
+fun main() = startComposeApp()
