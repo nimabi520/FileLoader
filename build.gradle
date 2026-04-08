@@ -105,3 +105,33 @@ tasks.register('runSwing', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'topview.fileloader.MonitorUI'
 }
+
+tasks.register('buildComposeJarToDist') {
+    group = 'distribution'
+    description = 'Build Compose uber jar and copy it to dist/FileLoader-compose.jar'
+    dependsOn tasks.named('packageUberJarForCurrentOS')
+
+    doLast {
+        def jarsDir = layout.buildDirectory.dir('compose/jars').get().asFile
+        def candidates = fileTree(jarsDir) {
+            include '*.jar'
+        }.files.findAll { it.name.startsWith('FileLoader-') }
+            .sort { a, b -> b.lastModified() <=> a.lastModified() }
+
+        if (candidates.isEmpty()) {
+            throw new GradleException("No Compose jar found in ${jarsDir}")
+        }
+
+        def sourceJar = candidates.first()
+        def distDir = layout.projectDirectory.dir('dist').asFile
+        distDir.mkdirs()
+
+        copy {
+            from sourceJar
+            into distDir
+            rename { 'FileLoader-compose.jar' }
+        }
+
+        logger.lifecycle("Compose jar ready: ${new File(distDir, 'FileLoader-compose.jar').absolutePath}")
+    }
+}

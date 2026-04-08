@@ -37,6 +37,14 @@ gradlew.bat packageReleaseExe
 
 > 说明：`exe` 需要在 Windows 环境下打包（由 `jpackage` 生成）。
 
+Compose 版本 jar 可使用一键任务输出到 `dist`：
+
+```bash
+./gradlew buildComposeJarToDist
+```
+
+执行后会生成（或覆盖）：`dist/FileLoader-compose.jar`。
+
 如果本机未安装 Gradle，可直接使用项目自带的 wrapper（`gradlew` / `gradlew.bat`）。
 
 ## 🚀 第一步：启动程序
