@@ -4,6 +4,7 @@ out/
 build/
 target/
 bin/
+dist/
 
 # 本地依赖（运行时下载）
 lib/*.jar
