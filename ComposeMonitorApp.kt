@@ -150,17 +150,28 @@ private class ComposeMonitorStore : MonitorCallbacks {
         batchRefreshScheduler.shutdownNow()
         batchQueryExecutor.shutdownNow()
 
-        uploadExecutor.shutdown()
-        try {
-            if (!uploadQueue.isEmpty()) {
-                addLog("等待队列清空，剩余文件: ${uploadQueue.size}")
+        if (!uploadQueue.isEmpty()) {
+            val remaining = mutableListOf<UploadTask>().also { uploadQueue.drainTo(it) }
+            logger.info("关闭时清空上传队列，剩余文件: ${remaining.size}")
+        }
+        uploadExecutor.shutdownNow()
+
+        // 在后台线程温和等待线程池结束，不阻塞窗口关闭路径
+        Thread {
+            try {
+                if (!uploadExecutor.awaitTermination(3, TimeUnit.SECONDS)) {
+                    logger.warning("上传线程池未在 3 秒内完全终止")
+                }
+                if (!batchQueryExecutor.awaitTermination(3, TimeUnit.SECONDS)) {
+                    logger.warning("状态查询线程池未在 3 秒内完全终止")
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
             }
-            if (!uploadExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                uploadExecutor.shutdownNow()
-            }
-        } catch (e: InterruptedException) {
-            uploadExecutor.shutdownNow()
-            Thread.currentThread().interrupt()
+        }.apply {
+            isDaemon = true
+            name = "Shutdown-Cleanup"
+            start()
         }
     }
 

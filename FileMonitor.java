@@ -311,20 +311,18 @@ public class FileMonitor {
         });
         watchServices.clear();
 
-        // 停止工作线程池
-        executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
-                logger.warning("Executor service forced shutdown");
-                ui.addLog("强制关闭监控线程池");
+        // 停止工作线程池（立即中断，不阻塞调用线程）
+        executorService.shutdownNow();
+        new Thread(() -> {
+            try {
+                if (!executorService.awaitTermination(3, TimeUnit.SECONDS)) {
+                    logger.warning("Executor service forced shutdown");
+                    ui.addLog("强制关闭监控线程池");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
-            Thread.currentThread().interrupt();
-            logger.info("Executor service shutdown interrupted");
-            ui.addLog("监控线程池关闭中断");
-        }
+        }, "FileMonitor-Shutdown").start();
     }
 
     /**

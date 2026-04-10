@@ -34,6 +34,7 @@ public class MonitorUI implements MonitorCallbacks {
     private final ConcurrentHashMap<String, Boolean> batchDownloadableFlags = new ConcurrentHashMap<>();
     private final Set<String> knownBatchIds = Collections.synchronizedSet(new LinkedHashSet<>());
     private final ScheduledExecutorService batchRefreshScheduler = Executors.newSingleThreadScheduledExecutor();
+    private final ExecutorService statusRefreshExecutor = Executors.newCachedThreadPool();
     private volatile ScheduledFuture<?> autoRefreshTask;
 
     // 业务模块
@@ -118,7 +119,7 @@ public class MonitorUI implements MonitorCallbacks {
      */
     private void initializeUI() {
         JFrame frame = new JFrame("多文件夹监控上传工具");
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         frame.setSize(800, 600);
         frame.setLocationRelativeTo(null);
 
@@ -161,26 +162,32 @@ public class MonitorUI implements MonitorCallbacks {
         frame.add(panel);
         frame.setVisible(true);
 
-        // 窗口关闭监听：执行优雅关机，尝试处理完剩余队列
+        // 窗口关闭监听：立即隐藏窗口，后台释放资源
         frame.addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosing(java.awt.event.WindowEvent e) {
-                fileMonitor.shutdown();
-                uploadExecutor.shutdown();
-                batchRefreshScheduler.shutdownNow();
-                try {
+                frame.dispose();
+                new Thread(() -> {
                     if (!uploadQueue.isEmpty()) {
-                        addLog("等待队列清空，剩余文件: " + uploadQueue.size());
-                        uploadExecutor.awaitTermination(30, TimeUnit.SECONDS);
+                        int remaining = uploadQueue.drainTo(new ArrayList<>());
+                        logger.info("关闭时清空上传队列，剩余文件: " + remaining);
                     }
-                    if (!uploadExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                        uploadExecutor.shutdownNow();
-                    }
-                } catch (InterruptedException ex) {
+                    fileMonitor.shutdown();
                     uploadExecutor.shutdownNow();
-                    Thread.currentThread().interrupt();
-                }
-                System.exit(0);
+                    batchRefreshScheduler.shutdownNow();
+                    statusRefreshExecutor.shutdownNow();
+                    try {
+                        if (!uploadExecutor.awaitTermination(3, TimeUnit.SECONDS)) {
+                            logger.warning("上传线程池未在 3 秒内完全终止");
+                        }
+                        if (!statusRefreshExecutor.awaitTermination(3, TimeUnit.SECONDS)) {
+                            logger.warning("状态刷新线程池未在 3 秒内完全终止");
+                        }
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                    System.exit(0);
+                }, "Shutdown-Cleanup").start();
             }
         });
     }
@@ -756,7 +763,7 @@ public class MonitorUI implements MonitorCallbacks {
     }
 
     private void refreshBatchStatus(String batchId) {
-        new Thread(() -> {
+        statusRefreshExecutor.submit(() -> {
             BatchStatusService.BatchStatusResult result = BatchStatusService.fetchBatchStatus(batchId);
             SwingUtilities.invokeLater(() -> {
                 updateBatchStatusRow(batchId, result.getMsg(), result.isDownloadable(),
@@ -765,7 +772,7 @@ public class MonitorUI implements MonitorCallbacks {
                     addLog("批次 " + batchId + " 已可下载");
                 }
             });
-        }).start();
+        });
     }
 
     private void applyAutoRefreshInterval(String selected) {
