@@ -189,6 +189,14 @@ public class FileMonitor {
             }
         }
 
+        // 压缩包过滤：文件夹监控中发现的压缩包直接跳过（用户主动选择的压缩包才会解压）
+        if (ArchiveExtractor.isArchiveFile(filePath.getFileName().toString())) {
+            logger.info("Skipping archive file in folder monitoring: " + filePath);
+            ui.addLog("跳过压缩包（请在添加路径时直接选择压缩包以解压上传）: " + filePath.getFileName());
+            checkingFiles.remove(filePath);
+            return;
+        }
+
         // 在单独的线程中检查文件是否写入完毕
         executorService.submit(() -> {
             try {

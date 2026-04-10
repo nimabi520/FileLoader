@@ -78,7 +78,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 import java.util.logging.Logger
-import javax.swing.JFileChooser
+import java.awt.FileDialog
+import java.awt.Frame
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
 
@@ -180,13 +181,27 @@ private class ComposeMonitorStore : MonitorCallbacks {
             return
         }
 
-        val folder = Paths.get(path)
-        if (!Files.exists(folder) || !Files.isDirectory(folder)) {
-            updateStatus("状态: 无效路径 $folder")
-            addLog("无效路径: $folder")
+        val file = File(path)
+        if (!file.exists()) {
+            updateStatus("状态: 路径不存在 $path")
+            addLog("路径不存在: $path")
             return
         }
 
+        // 如果是压缩包，解压并上传内部文件
+        if (file.isFile && ArchiveExtractor.isArchiveFile(file.name)) {
+            handleArchiveUpload(file)
+            return
+        }
+
+        // 如果不是目录，提示错误
+        if (!file.isDirectory) {
+            updateStatus("状态: 无效路径（请选择文件夹或压缩包）$path")
+            addLog("无效路径（请选择文件夹或压缩包）: $path")
+            return
+        }
+
+        val folder = file.toPath()
         if (monitoredFolders.putIfAbsent(folder, true) == null) {
             fileMonitor.startMonitoring(folder)
             refreshMonitoredFoldersUi()
@@ -195,6 +210,67 @@ private class ComposeMonitorStore : MonitorCallbacks {
         } else {
             updateStatus("状态: 文件夹已存在 $folder")
             addLog("文件夹已存在: $folder")
+        }
+    }
+
+    /**
+     * 处理压缩包上传：解压并逐个上传内部文件
+     */
+    private fun handleArchiveUpload(archiveFile: File) {
+        val batchId = System.currentTimeMillis().toString()
+        addLog("检测到压缩包: ${archiveFile.name}")
+        updateStatus("正在解压: ${archiveFile.name}")
+
+        batchQueryExecutor.submit {
+            var tempDir: Path? = null
+            try {
+                // 创建临时解压目录
+                tempDir = ArchiveExtractor.createTempExtractDir(batchId)
+                addLog("创建临时解压目录: $tempDir")
+
+                // 解压 ZIP 文件
+                val extractedFiles = ArchiveExtractor.extractZip(archiveFile, tempDir)
+                addLog("解压完成，共 ${extractedFiles.size} 个文件")
+
+                // 过滤出有效文件
+                val validFiles = ArchiveExtractor.filterValidFiles(extractedFiles)
+                if (validFiles.isEmpty()) {
+                    addLog("压缩包内没有可上传的文件")
+                    updateStatus("压缩包为空: ${archiveFile.name}")
+                    return@submit
+                }
+
+                addLog("准备上传 ${validFiles.size} 个文件，批次ID: $batchId")
+                updateStatus("正在上传压缩包内容 (${validFiles.size} 个文件)...")
+
+                // 注册批次ID
+                registerBatchId(batchId)
+
+                // 逐个添加上传任务
+                validFiles.forEach { file ->
+                    val task = UploadTask(file, batchId)
+                    if (uploadQueue.offer(task)) {
+                        addLog("已加入上传队列: ${file.name} (批次: $batchId)")
+                    } else {
+                        addLog("加入上传队列失败: ${file.name}")
+                    }
+                }
+
+                updateStatus("压缩包文件已加入上传队列: ${archiveFile.name} (${validFiles.size} 个文件)")
+
+            } catch (e: Exception) {
+                logger.log(Level.SEVERE, "解压失败: ${archiveFile.path}", e)
+                addLog("解压失败: ${archiveFile.name} - ${e.message}")
+                updateStatus("解压失败: ${archiveFile.name}")
+            } finally {
+                // 延迟清理临时文件（5分钟后）
+                tempDir?.let { dir ->
+                    batchRefreshScheduler.schedule({
+                        ArchiveExtractor.cleanupTempDir(dir)
+                        addLog("清理临时解压目录: $dir")
+                    }, 5, TimeUnit.MINUTES)
+                }
+            }
         }
     }
 
@@ -490,10 +566,20 @@ private class ComposeMonitorStore : MonitorCallbacks {
     }
 
     private fun chooseDirectory(title: String): File? {
-        val chooser = JFileChooser()
-        chooser.fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
-        chooser.dialogTitle = title
-        return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+        // 使用FileDialog获得原生文件选择器体验
+        // 在macOS上需要设置系统属性才能选择目录
+        System.setProperty("apple.awt.fileDialogForDirectories", "true")
+        val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD)
+        dialog.isVisible = true
+        val file = dialog.file
+        val directory = dialog.directory
+        return if (file != null && directory != null) {
+            File(directory, file)
+        } else if (directory != null) {
+            File(directory)
+        } else {
+            null
+        }
     }
 }
 
