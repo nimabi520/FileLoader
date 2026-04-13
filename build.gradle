@@ -1,184 +1,46 @@
 plugins {
-    id 'java'
-    id 'org.jetbrains.kotlin.jvm' version '1.9.24'
-    id 'org.jetbrains.compose' version '1.6.11'
+    id 'base'
 }
 
 group = 'topview.fileloader'
-version = '0.1.0'
+version = '0.2.0'
 
-repositories {
-    google()
-    mavenCentral()
-    maven {
-        url 'https://maven.pkg.jetbrains.space/public/p/compose/dev'
-    }
-}
-
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
-}
-
-sourceSets {
-    main {
-        java {
-            srcDirs = []
-        }
-        kotlin {
-            srcDirs = ['.']
-            include '*.kt'
-        }
-        compileClasspath += files(layout.buildDirectory.dir('backend-classes'))
-        runtimeClasspath += files(layout.buildDirectory.dir('backend-classes'))
-        output.dir(layout.buildDirectory.dir('backend-classes'), builtBy: 'compileBackendJava')
-    }
-    test {
-        java {
-            srcDirs = ['src/test/java']
-        }
-        kotlin {
-            srcDirs = ['src/test/kotlin']
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url 'https://maven.pkg.jetbrains.space/public/p/compose/dev'
         }
     }
 }
 
-dependencies {
-    implementation compose.desktop.currentOs
-    implementation compose.material3
-    implementation fileTree(dir: 'lib', include: ['*.jar'])
+subprojects {
+    apply plugin: 'java'
 
-    // Add other OS runtimes on runtimeClasspath so variant selection stays compatible.
-    runtimeOnly compose.desktop.windows_x64
-    runtimeOnly compose.desktop.linux_x64
-    runtimeOnly compose.desktop.macos_x64
-    runtimeOnly compose.desktop.macos_arm64
-
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
-}
-
-compose.desktop {
-    application {
-        mainClass = 'topview.fileloader.ExeMainKt'
-        nativeDistributions {
-            packageName = 'FileLoader'
-            packageVersion = '1.0.0'
-            targetFormats(
-                org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg,
-                org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe
-            )
-
-            windows {
-                shortcut = true
-                menu = true
-                dirChooser = true
-                perUserInstall = true
-            }
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(17)
         }
     }
-}
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-}
-
-tasks.register('compileBackendJava', JavaCompile) {
-    source = fileTree('.') {
-        include '*.java'
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
     }
-    classpath = files(fileTree(dir: 'lib', include: ['*.jar']))
-    destinationDirectory = layout.buildDirectory.dir('backend-classes')
-    sourceCompatibility = '17'
-    targetCompatibility = '17'
-    options.encoding = 'UTF-8'
-}
 
-tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-    kotlinOptions.jvmTarget = '17'
-}
-
-tasks.named('compileKotlin') {
-    dependsOn tasks.named('compileBackendJava')
-}
-
-tasks.test {
-    useJUnitPlatform()
-}
-
-tasks.register('runSwing', JavaExec) {
-    group = 'application'
-    description = 'Run the legacy Swing MonitorUI entrypoint.'
-    classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'topview.fileloader.MonitorUI'
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+    }
 }
 
 tasks.register('buildComposeJarToDist') {
     group = 'distribution'
     description = 'Build Compose uber jar and copy it to dist/FileLoader-compose.jar'
-    dependsOn tasks.named('packageUberJarForCurrentOS')
-
-    doLast {
-        def jarsDir = layout.buildDirectory.dir('compose/jars').get().asFile
-        def candidates = fileTree(jarsDir) {
-            include '*.jar'
-        }.files.findAll { it.name.startsWith('FileLoader-') }
-            .sort { a, b -> b.lastModified() <=> a.lastModified() }
-
-        if (candidates.isEmpty()) {
-            throw new RuntimeException("No Compose jar found in ${jarsDir}")
-        }
-
-        def sourceJar = candidates.first()
-        def distDir = layout.projectDirectory.dir('dist').asFile
-        distDir.mkdirs()
-
-        copy {
-            from sourceJar
-            into distDir
-            rename { 'FileLoader-compose.jar' }
-        }
-
-        logger.lifecycle("Compose jar ready: ${new File(distDir, 'FileLoader-compose.jar').absolutePath}")
-    }
-}
-
-tasks.register('packageUberJarForAllPlatforms', Jar) {
-    group = 'distribution'
-    description = 'Build Compose uber jar with native runtimes for Windows, Linux, and macOS'
-    dependsOn tasks.named('classes')
-    archiveFileName = 'FileLoader-compose-universal.jar'
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-
-    manifest {
-        attributes('Main-Class': 'topview.fileloader.ExeMainKt')
-    }
-
-    from(sourceSets.main.output)
-
-    from({
-        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
-    }) {
-        exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
-    }
+    dependsOn(':app-compose:buildComposeJarToDist')
 }
 
 tasks.register('buildComposeUniversalJarToDist') {
     group = 'distribution'
     description = 'Build cross-platform Compose uber jar and copy it to dist/FileLoader-compose-universal.jar'
-    dependsOn tasks.named('packageUberJarForAllPlatforms')
-
-    doLast {
-        def sourceJar = tasks.named('packageUberJarForAllPlatforms', Jar).get().archiveFile.get().asFile
-        def distDir = layout.projectDirectory.dir('dist').asFile
-        distDir.mkdirs()
-
-        copy {
-            from sourceJar
-            into distDir
-            rename { 'FileLoader-compose-universal.jar' }
-        }
-
-        logger.lifecycle("Cross-platform Compose jar ready: ${new File(distDir, 'FileLoader-compose-universal.jar').absolutePath}")
-    }
+    dependsOn(':app-compose:buildComposeUniversalJarToDist')
 }

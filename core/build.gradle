@@ -1,0 +1,9 @@
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    implementation fileTree(dir: rootProject.file('lib'), include: ['*.jar'])
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}

@@ -1,136 +1,58 @@
-# 文件自动上传系统 - 使用说明
+# FileLoader
 
-欢迎使用文件自动上传系统！本工具可以帮助您自动将指定文件夹内的文件上传到服务器。即使您不熟悉电脑操作，只需按照以下简单步骤即可轻松使用。
+多文件夹监控自动上传工具（Compose Desktop 版）。
 
-## 🎯 给老师直接使用（推荐）
+## 项目结构
 
-项目已提供可直接运行的单文件程序：`dist/FileLoader-standalone.jar`。
+项目已整理为双模块结构：
 
-- macOS / Windows：安装 Java 17+ 后可尝试直接双击 `FileLoader-standalone.jar`
-- 如果双击未启动：在终端执行 `java -jar dist/FileLoader-standalone.jar`
+- `core`：监控、上传下载服务、配置、数据库、模型与工具类。
+- `app-compose`：Compose Desktop 界面与应用入口。
 
-> 说明：该 jar 已包含运行所需依赖（含 SQLite 驱动），可直接分发给老师使用。
+运行时配置与本地数据库默认存放在用户目录：
 
-## 🧪 开发版（Compose 迁移阶段）
+- `~/.fileloader/fileLoader.properties`
+- `~/.fileloader/batches.db`
 
-项目已切换到 Compose Desktop 前端重写阶段，新增了 Gradle 启动方式：
+程序会在首次启动时自动尝试迁移根目录历史文件（若存在）。
 
-- 启动 Compose 迁移界面：`./gradlew run`
-- 启动旧版 Swing 主界面：`./gradlew runSwing`
+## 环境要求
 
-## 🪟 Windows EXE 打包（新入口）
+- JDK 17+
+- Gradle Wrapper（项目自带 `gradlew` / `gradlew.bat`）
 
-项目已增加 EXE 专用入口类：`topview.fileloader.ExeMainKt`。
+## 常用命令
 
-- 默认行为：启动 Compose 界面
-- 兼容参数：`--ui=swing` 或 `--swing` 可切换到旧版 Swing 界面
+在项目根目录执行：
+
+- 启动 Compose 应用：
+  - macOS/Linux: `./gradlew :app-compose:run`
+  - Windows: `gradlew.bat :app-compose:run`
+- 一键构建 Compose JAR 到 `dist`：
+  - macOS/Linux: `./gradlew buildComposeJarToDist`
+  - Windows: `gradlew.bat buildComposeJarToDist`
+- 构建跨平台 uber JAR 到 `dist`：
+  - macOS/Linux: `./gradlew buildComposeUniversalJarToDist`
+  - Windows: `gradlew.bat buildComposeUniversalJarToDist`
+- 构建全部模块：
+  - macOS/Linux: `./gradlew build`
+  - Windows: `gradlew.bat build`
+
+## Windows EXE 打包
 
 在 Windows 机器执行：
 
 ```bash
-gradlew.bat packageReleaseExe
+gradlew.bat :app-compose:packageReleaseExe
 ```
 
-生成产物默认位于：
+产物默认目录：
 
-- `build/compose/binaries/main-release/exe/`
+- `app-compose/build/compose/binaries/main-release/exe/`
 
-> 说明：`exe` 需要在 Windows 环境下打包（由 `jpackage` 生成）。
+说明：EXE 打包依赖 `jpackage`，需在 Windows 环境执行。
 
-Compose 版本 jar 可使用一键任务输出到 `dist`：
+## 说明
 
-```bash
-./gradlew buildComposeJarToDist
-```
-
-执行后会生成（或覆盖）：`dist/FileLoader-compose.jar`。
-
-如果本机未安装 Gradle，可直接使用项目自带的 wrapper（`gradlew` / `gradlew.bat`）。
-
-## 🚀 第一步：启动程序
-
-1. 找到您下载并解压好的项目文件夹。
-2. 根据您的系统双击对应启动脚本：
-	- Windows：`start-windows.bat`
-	- macOS：`start-mac.command`
-3. 程序会自动编译并启动主界面；启动后命令行窗口会自动关闭。
-
-## 📂 第二步：选择要监听的文件夹
-
-程序启动后，您会看到一个操作界面。
-
-1. 点击界面上的 **“浏览”** 按钮。
-2. 在弹出的窗口中，找到并选中您想要用来存放待上传文件的文件夹（例如桌面上的“待上传作业”文件夹）。
-3. 点击“确定”或“选择文件夹”。
-
-## ➕ 第三步：添加到监听队列
-
-1. 选好文件夹后，点击界面上的 **“添加文件夹”** 按钮。
-2. 您会看到该文件夹的路径出现在了下方的列表中，这表示系统已经开始“盯着”这个文件夹了。
-
-## 📤 第四步：自动上传文件
-
-一切准备就绪！现在您可以开始工作了：
-
-1. 只要您把任何需要上传的文件（如 Word 文档、图片等）**复制或移动** 到您刚才添加的那个文件夹里。
-2. 系统就会自动发现新文件，并帮您上传到服务器。
-3. 您可以在程序的界面上看到上传的进度和结果。
-
-**💡 小贴士：**
-* 您可以重复第二步和第三步，添加多个不同的文件夹让系统同时监听。
-* 只要程序没有关闭，它就会一直默默地帮您上传新放入的文件。
-* 如果您不想再监听某个文件夹，可以在列表中选中它，然后点击“移除”或相应的删除按钮。
-
----
-
-## \ud83d\udd27 SQLite 驱动说明（可选）
-
-如果您希望“批次历史记录”在重启后仍然保留，需要 SQLite 驱动：
-
-1. 下载 `sqlite-jdbc-*.jar`
-2. 在项目根目录创建 `lib` 文件夹（若不存在）
-3. 把 jar 放到 `lib` 目录下（例如 `lib/sqlite-jdbc-3.46.0.0.jar`）
-
-本项目已配置 VS Code 自动引用 `lib/**/*.jar`。如果未放置驱动，程序会自动进入“不持久化模式”，不影响上传和批次状态查询功能。
-
----
-
-## ▶️ 一键启动（Windows / macOS）
-
-项目根目录已提供跨平台启动脚本：
-
-- Windows：双击 `start-windows.bat`
-- macOS：双击 `start-mac.command`
-
-脚本会自动执行以下步骤：
-
-1. 检查 `java` 是否可用（需 JDK 17+）
-2. 优先使用项目内 `gradlew`（不存在时回退系统 `gradle`）
-3. 通过 `gradle run` 后台启动 Compose 迁移界面
-
-启动完成后命令行窗口会自动关闭，不影响主程序继续运行。
-
-如果是首次在 macOS 双击启动失败，请先在终端执行一次：
-
-```bash
-chmod +x start-mac.command
-```
-
----
-
-## 🧱 开发者：重新打包单文件 jar
-
-如需重新生成可分发的可执行 jar，可在项目根目录执行：
-
-```bash
-rm -rf build dist
-mkdir -p build/classes dist
-javac -encoding UTF-8 -cp "lib/*" -d build/classes *.java
-for j in lib/*.jar; do [ -f "$j" ] && (cd build/classes && jar xf "../../$j"); done
-if [ -d build/classes/META-INF ]; then
-	find build/classes/META-INF -type f \( -name '*.SF' -o -name '*.RSA' -o -name '*.DSA' \) -delete
-fi
-jar cfe dist/FileLoader-standalone.jar topview.fileloader.MonitorUI -C build/classes .
-```
-
-生成产物：`dist/FileLoader-standalone.jar`
+- 旧 Swing 界面与 `runSwing` 任务已移除。
+- 入口类为 `topview.fileloader.app.ExeMainKt`，默认启动 Compose。
