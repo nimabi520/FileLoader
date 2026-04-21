@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+
 package topview.fileloader.app
 
 import topview.fileloader.config.AppConfig
@@ -42,7 +44,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -64,6 +65,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -71,10 +73,36 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import java.awt.Desktop
+import java.awt.datatransfer.DataFlavor
+import java.awt.dnd.DnDConstants
+import java.awt.dnd.DropTarget
+import java.awt.dnd.DropTargetAdapter
+import java.awt.dnd.DropTargetDropEvent
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -154,9 +182,15 @@ private class ComposeMonitorStore : MonitorCallbacks {
     val selectedFolder = mutableStateOf<String?>(null)
     val statusText = mutableStateOf("状态: 等待监控...")
     val autoRefreshLabel = mutableStateOf("手动刷新")
-    val showSettingsDialog = mutableStateOf(false)
+    val showSettingsPanel = mutableStateOf(false)
     val showLoginDialog = mutableStateOf(false)
     val showEncryptLoginDialog = mutableStateOf(false)
+    val snackbarHostState = SnackbarHostState()
+    val showFolderContextMenu = mutableStateOf(false)
+    val contextMenuFolder = mutableStateOf<String?>(null)
+    val contextMenuOffset = mutableStateOf(Offset.Zero)
+    val isDragOver = mutableStateOf(false)
+    val pendingSnackbarMessage = mutableStateOf<String?>(null)
     val serverUrlInput = mutableStateOf("")
     val connectTimeoutInput = mutableStateOf("")
     val readTimeoutInput = mutableStateOf("")
@@ -272,6 +306,7 @@ private class ComposeMonitorStore : MonitorCallbacks {
             refreshMonitoredFoldersUi()
             updateStatus("状态: 成功添加文件夹 $folder")
             addLog("添加监控文件夹: $folder")
+            showSnackbar("已添加监控文件夹: $folder")
         } else {
             updateStatus("状态: 文件夹已存在 $folder")
             addLog("文件夹已存在: $folder")
@@ -348,7 +383,7 @@ private class ComposeMonitorStore : MonitorCallbacks {
         removeFolder(Paths.get(selected))
     }
 
-    private fun removeFolder(path: Path) {
+    fun removeFolder(path: Path) {
         if (monitoredFolders.remove(path) != null) {
             fileMonitor.stopMonitoring(path)
             refreshMonitoredFoldersUi()
@@ -362,11 +397,42 @@ private class ComposeMonitorStore : MonitorCallbacks {
 
     fun openConfig() {
         reloadConfigDraft()
-        showSettingsDialog.value = true
+        showSettingsPanel.value = true
     }
 
-    fun closeConfigDialog() {
-        showSettingsDialog.value = false
+    fun closeSettingsPanel() {
+        showSettingsPanel.value = false
+    }
+
+    fun addFolderFromDrop(paths: List<String>) {
+        paths.forEach { path ->
+            val file = File(path)
+            if (file.isDirectory || (file.isFile && ArchiveExtractor.isArchiveFile(file.name))) {
+                addFolder(path)
+            }
+        }
+    }
+
+    fun showSnackbar(message: String) {
+        onUi { pendingSnackbarMessage.value = message }
+    }
+
+    fun openFolderInExplorer(path: String) {
+        try {
+            Desktop.getDesktop().open(File(path))
+        } catch (e: Exception) {
+            addLog("打开目录失败: $path - ${e.message}")
+        }
+    }
+
+    fun triggerFolderUpload(path: String) {
+        val folder = File(path)
+        if (!folder.isDirectory) return
+        folder.listFiles()?.forEach { file ->
+            if (file.isFile) {
+                uploadFile(file.absolutePath)
+            }
+        }
     }
 
     fun openLoginDialog() {
@@ -406,6 +472,10 @@ private class ComposeMonitorStore : MonitorCallbacks {
         batchQueryExecutor.submit {
             try {
                 val result = AuthStatusService.logout()
+                if (result.state == AuthStatusService.LogoutState.SUCCESS ||
+                    result.state == AuthStatusService.LogoutState.UNAUTHORIZED) {
+                    showSnackbar("已退出登录")
+                }
                 val message = when (result.state) {
                     AuthStatusService.LogoutState.SUCCESS -> {
                         loggedInFlag = false
@@ -497,6 +567,7 @@ private class ComposeMonitorStore : MonitorCallbacks {
                             closeEncryptLoginDialog()
                         }
                         addLog("[登录成功] 用户ID: $userId")
+                        showSnackbar("登录成功")
                         checkLoginStatus("登录后检查", openDialogOnUnauthorized = false)
                     }
                     EncryptPasswordService.State.NETWORK_ERROR,
@@ -660,7 +731,6 @@ private class ComposeMonitorStore : MonitorCallbacks {
 
         addLog("配置已更新")
         updateStatus("配置已保存并生效")
-        showSettingsDialog.value = false
         return null
     }
 
@@ -854,16 +924,19 @@ private class ComposeMonitorStore : MonitorCallbacks {
                 updateStatus("上传成功: $fileName")
                 addLog("上传成功: $fileName - ${response.message}")
                 updateUploadStatus(batchId, fileName, "成功")
+                showSnackbar("上传成功: $fileName")
             } else {
                 updateStatus("上传失败: $fileName")
                 addLog("上传失败: $fileName - ${response.message}")
                 updateUploadStatus(batchId, fileName, "失败")
+                showSnackbar("上传失败: $fileName")
             }
         } catch (e: Exception) {
             logger.log(Level.SEVERE, "Upload error for ${file.path}", e)
             updateStatus("上传错误: $fileName")
             addLog("上传错误: $fileName - ${e.message}")
             updateUploadStatus(batchId, fileName, "错误")
+            showSnackbar("上传错误: $fileName")
         } finally {
             onUi {
                 progressMap.remove(fileName)
@@ -1095,261 +1168,394 @@ private fun ComposeMonitorScreen(store: ComposeMonitorStore) {
         )
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(background)
-    ) {
-        if (store.showLoginDialog.value) {
-            LoginStatusDialog(store)
+    LaunchedEffect(store.pendingSnackbarMessage.value) {
+        store.pendingSnackbarMessage.value?.let { message ->
+            store.snackbarHostState.showSnackbar(message)
+            store.pendingSnackbarMessage.value = null
         }
+    }
 
-        if (store.showEncryptLoginDialog.value) {
-            EncryptLoginDialog(store)
-        }
-
-        if (store.showSettingsDialog.value) {
-            SettingsDialog(store)
-        }
-
-        Column(
+    Scaffold(
+        snackbarHost = { SnackbarHost(store.snackbarHostState) }
+    ) { _ ->
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .background(background)
         ) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.cardColors(containerColor = colors.surface.copy(alpha = 0.94f)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
-                    Text("FileLoader", style = MaterialTheme.typography.headlineSmall)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "简洁、稳定、现代化的自动上传面板",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = colors.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (store.isCheckingLogin.value) {
-                            "登录状态: 检查中..."
-                        } else if (store.isLoggedIn.value) {
-                            val display = if (store.loginUserName.value.isNotBlank()) {
-                                "${store.loginUserName.value} (${store.loginUserId.value.ifBlank { "未知用户" }})"
-                            } else {
-                                store.loginUserId.value.ifBlank { "未知用户" }
-                            }
-                            "登录状态: 已登录 · $display"
-                        } else {
-                            "登录状态: 未登录"
-                        },
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (store.isLoggedIn.value) colors.secondary else colors.error
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = store.folderInput.value,
-                            onValueChange = { store.folderInput.value = it },
-                            label = { Text("文件夹路径") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.weight(1f)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.cardColors(containerColor = colors.surface.copy(alpha = 0.94f)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
+                        Text("FileLoader", style = MaterialTheme.typography.headlineSmall)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "简洁、稳定、现代化的自动上传面板",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = colors.onSurfaceVariant
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        OutlinedButton(
-                            onClick = { store.browseFolder() },
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("浏览")
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Button(
-                            onClick = { store.addFolderFromInput() },
-                            enabled = store.isLoggedIn.value,
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("添加文件夹")
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                store.openLoginDialog()
-                                store.checkLoginStatus("手动检查", openDialogOnUnauthorized = true)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (store.isCheckingLogin.value) {
+                                "登录状态: 检查中..."
+                            } else if (store.isLoggedIn.value) {
+                                val display = if (store.loginUserName.value.isNotBlank()) {
+                                    "${store.loginUserName.value} (${store.loginUserId.value.ifBlank { "未知用户" }})"
+                                } else {
+                                    store.loginUserId.value.ifBlank { "未知用户" }
+                                }
+                                "登录状态: 已登录 · $display"
+                            } else {
+                                "登录状态: 未登录"
                             },
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text(
-                                if (store.isCheckingLogin.value) "登录状态: 检查中"
-                                else if (store.isLoggedIn.value) "登录状态: 已登录"
-                                else "登录状态: 未登录"
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (store.isLoggedIn.value) colors.secondary else colors.error
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = store.folderInput.value,
+                                onValueChange = { store.folderInput.value = it },
+                                label = { Text("文件夹路径") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.weight(1f)
                             )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            OutlinedButton(
+                                onClick = { store.browseFolder() },
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("浏览")
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Button(
+                                onClick = { store.addFolderFromInput() },
+                                enabled = store.isLoggedIn.value,
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("添加文件夹")
+                            }
                         }
-                        OutlinedButton(
-                            onClick = { store.removeSelectedFolder() },
-                            enabled = store.selectedFolder.value != null,
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("移除选中")
-                        }
-                        Button(
-                            onClick = { store.openConfig() },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors()
-                        ) {
-                            Text("配置")
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    store.openLoginDialog()
+                                    store.checkLoginStatus("手动检查", openDialogOnUnauthorized = true)
+                                },
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text(
+                                    if (store.isCheckingLogin.value) "登录状态: 检查中"
+                                    else if (store.isLoggedIn.value) "登录状态: 已登录"
+                                    else "登录状态: 未登录"
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { store.removeSelectedFolder() },
+                                enabled = store.selectedFolder.value != null,
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("移除选中")
+                            }
+                            Button(
+                                onClick = { store.openConfig() },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors()
+                            ) {
+                                Text("配置")
+                            }
                         }
                     }
                 }
-            }
 
-            Row(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Card(
-                    modifier = Modifier
-                        .width(320.dp)
-                        .fillMaxHeight(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = colors.surface.copy(alpha = 0.95f)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Text(
-                            text = "监控文件夹",
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        HorizontalDivider(color = colors.outline.copy(alpha = 0.25f))
+                    Card(
+                        modifier = Modifier
+                            .width(320.dp)
+                            .fillMaxHeight(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = colors.surface.copy(alpha = 0.95f)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Text(
+                                text = "监控文件夹",
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            HorizontalDivider(color = colors.outline.copy(alpha = 0.25f))
 
-                        if (store.monitoredFoldersUi.isEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(16.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("暂无监控文件夹", color = colors.onSurfaceVariant)
-                            }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(store.monitoredFoldersUi) { folder ->
-                                    val selected = store.selectedFolder.value == folder
-                                    Surface(
-                                        shape = RoundedCornerShape(14.dp),
-                                        color = if (selected) colors.secondaryContainer else colors.surface,
-                                        border = BorderStroke(
-                                            width = 1.dp,
-                                            color = if (selected) colors.secondary else colors.outline.copy(alpha = 0.25f)
-                                        ),
-                                        tonalElevation = if (selected) 2.dp else 0.dp,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { store.selectedFolder.value = folder }
-                                    ) {
-                                        Text(
-                                            text = folder,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            style = MaterialTheme.typography.bodyLarge
-                                        )
+                            if (store.monitoredFoldersUi.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("暂无监控文件夹", color = colors.onSurfaceVariant)
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(store.monitoredFoldersUi) { folder ->
+                                        val selected = store.selectedFolder.value == folder
+                                        Surface(
+                                            shape = RoundedCornerShape(14.dp),
+                                            color = if (selected) colors.secondaryContainer else colors.surface,
+                                            border = BorderStroke(
+                                                width = 1.dp,
+                                                color = if (selected) colors.secondary else colors.outline.copy(alpha = 0.25f)
+                                            ),
+                                            tonalElevation = if (selected) 2.dp else 0.dp,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { store.selectedFolder.value = folder }
+                                                .onPointerEvent(PointerEventType.Press) { event ->
+                                                    if (event.button == PointerButton.Secondary) {
+                                                        val change = event.changes.first()
+                                                        store.contextMenuOffset.value = change.position
+                                                        store.contextMenuFolder.value = folder
+                                                        store.showFolderContextMenu.value = true
+                                                    }
+                                                }
+                                        ) {
+                                            Box(modifier = Modifier.fillMaxWidth()) {
+                                                Text(
+                                                    text = folder,
+                                                    modifier = Modifier
+                                                        .padding(horizontal = 12.dp, vertical = 11.dp)
+                                                        .fillMaxWidth(),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                                val density = LocalDensity.current
+                                                DropdownMenu(
+                                                    expanded = store.showFolderContextMenu.value && store.contextMenuFolder.value == folder,
+                                                    onDismissRequest = { store.showFolderContextMenu.value = false },
+                                                    offset = with(density) {
+                                                        DpOffset(
+                                                            store.contextMenuOffset.value.x.toDp(),
+                                                            store.contextMenuOffset.value.y.toDp()
+                                                        )
+                                                    }
+                                                ) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("打开目录") },
+                                                        onClick = {
+                                                            store.showFolderContextMenu.value = false
+                                                            store.openFolderInExplorer(folder)
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("立即扫描上传") },
+                                                        onClick = {
+                                                            store.showFolderContextMenu.value = false
+                                                            store.triggerFolderUpload(folder)
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("移除监控") },
+                                                        onClick = {
+                                                            store.showFolderContextMenu.value = false
+                                                            store.removeFolder(Paths.get(folder))
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                Card(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = colors.surface.copy(alpha = 0.95f)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        TabRow(
-                            selectedTabIndex = selectedTab,
-                            containerColor = Color.Transparent,
-                            divider = {
-                                HorizontalDivider(color = colors.outline.copy(alpha = 0.2f))
-                            }
-                        ) {
-                            tabs.forEachIndexed { index, title ->
-                                Tab(
-                                    selected = selectedTab == index,
-                                    onClick = { selectedTab = index },
-                                    text = { Text(title) }
-                                )
-                            }
-                        }
-
-                        when (selectedTab) {
-                            0 -> UploadRecordsTab(store)
-                            1 -> BatchStatusTab(store)
-                            else -> LogTab(store)
-                        }
-                    }
-                }
-            }
-
-            if (store.progressMap.isNotEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = colors.surface.copy(alpha = 0.95f)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                        Text("上传进度", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        store.progressMap.toSortedMap().forEach { (fileName, progress) ->
-                            Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (progress < 0) {
-                                    LinearProgressIndicator(modifier = Modifier.weight(1f))
-                                } else {
-                                    val value = progress.coerceIn(0, 100) / 100f
-                                    LinearProgressIndicator(progress = { value }, modifier = Modifier.weight(1f))
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = colors.surface.copy(alpha = 0.95f)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            TabRow(
+                                selectedTabIndex = selectedTab,
+                                containerColor = Color.Transparent,
+                                divider = {
+                                    HorizontalDivider(color = colors.outline.copy(alpha = 0.2f))
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(if (progress < 0) "..." else "$progress%")
+                            ) {
+                                tabs.forEachIndexed { index, title ->
+                                    Tab(
+                                        selected = selectedTab == index,
+                                        onClick = { selectedTab = index },
+                                        text = { Text(title) }
+                                    )
+                                }
                             }
-                            Spacer(modifier = Modifier.height(10.dp))
+
+                            when (selectedTab) {
+                                0 -> UploadRecordsTab(store)
+                                1 -> BatchStatusTab(store)
+                                else -> LogTab(store)
+                            }
                         }
                     }
                 }
+
+                if (store.progressMap.isNotEmpty()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = colors.surface.copy(alpha = 0.95f)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                            Text("上传进度", style = MaterialTheme.typography.titleMedium)
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            store.progressMap.toSortedMap().forEach { (fileName, progress) ->
+                                Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (progress < 0) {
+                                        LinearProgressIndicator(modifier = Modifier.weight(1f))
+                                    } else {
+                                        val value = progress.coerceIn(0, 100) / 100f
+                                        LinearProgressIndicator(progress = { value }, modifier = Modifier.weight(1f))
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (progress < 0) "..." else "$progress%")
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = colors.surface.copy(alpha = 0.9f),
+                    tonalElevation = 1.dp
+                ) {
+                    Text(
+                        text = store.statusText.value,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
             }
 
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                color = colors.surface.copy(alpha = 0.9f),
-                tonalElevation = 1.dp
+            AnimatedDialog(
+                visible = store.showLoginDialog.value,
+                onDismissRequest = { store.closeLoginDialog() }
             ) {
-                Text(
-                    text = store.statusText.value,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    style = MaterialTheme.typography.bodyLarge
+                LoginStatusDialog(store)
+            }
+
+            AnimatedDialog(
+                visible = store.showEncryptLoginDialog.value,
+                onDismissRequest = { store.closeEncryptLoginDialog() }
+            ) {
+                EncryptLoginDialog(store)
+            }
+
+            if (store.isDragOver.value) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "拖拽文件夹到此处添加监控",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                }
+            }
+
+            AnimatedVisibility(
+                visible = store.showSettingsPanel.value,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .clickable { store.closeSettingsPanel() }
                 )
+            }
+
+            AnimatedVisibility(
+                visible = store.showSettingsPanel.value,
+                enter = slideInHorizontally { it },
+                exit = slideOutHorizontally { it },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
+                SettingsPanel(store)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnimatedDialog(
+    visible: Boolean,
+    onDismissRequest: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(200)),
+        exit = fadeOut(tween(180))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.45f))
+                .clickable { onDismissRequest() },
+            contentAlignment = Alignment.Center
+        ) {
+            AnimatedVisibility(
+                visible = visible,
+                enter = fadeIn(tween(180)) + scaleIn(
+                    initialScale = 0.88f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    )
+                ),
+                exit = fadeOut(tween(120)) + scaleOut(
+                    targetScale = 0.92f,
+                    animationSpec = tween(120)
+                )
+            ) {
+                content()
             }
         }
     }
@@ -1358,10 +1564,24 @@ private fun ComposeMonitorScreen(store: ComposeMonitorStore) {
 @Composable
 private fun LoginStatusDialog(store: ComposeMonitorStore) {
     val colors = MaterialTheme.colorScheme
-    AlertDialog(
-        onDismissRequest = { store.closeLoginDialog() },
-        title = { Text("登录状态") },
-        text = {
+    Card(
+        modifier = Modifier.width(380.dp),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "登录状态",
+                style = MaterialTheme.typography.headlineSmall,
+                color = colors.onSurface
+            )
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1392,17 +1612,17 @@ private fun LoginStatusDialog(store: ComposeMonitorStore) {
                     )
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { store.checkLoginStatus("弹窗刷新", openDialogOnUnauthorized = true) },
-                enabled = !store.isCheckingLogin.value && !store.isLoggingOut.value
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
             ) {
-                Text(if (store.isCheckingLogin.value) "检查中..." else "刷新状态")
-            }
-        },
-        dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(
+                    onClick = { store.closeLoginDialog() },
+                    enabled = !store.isLoggingOut.value
+                ) {
+                    Text("关闭")
+                }
                 if (store.isLoggedIn.value) {
                     TextButton(
                         onClick = { store.logout("弹窗退出登录") },
@@ -1410,25 +1630,49 @@ private fun LoginStatusDialog(store: ComposeMonitorStore) {
                     ) {
                         Text(if (store.isLoggingOut.value) "退出中..." else "退出登录")
                     }
+                } else {
+                    TextButton(
+                        onClick = {
+                            store.closeLoginDialog()
+                            store.openEncryptLoginDialog()
+                        },
+                        enabled = !store.isCheckingLogin.value && !store.isLoggingOut.value
+                    ) {
+                        Text("去登录")
+                    }
                 }
                 TextButton(
-                    onClick = { store.closeLoginDialog() },
-                    enabled = !store.isLoggingOut.value
+                    onClick = { store.checkLoginStatus("弹窗刷新", openDialogOnUnauthorized = true) },
+                    enabled = !store.isCheckingLogin.value && !store.isLoggingOut.value
                 ) {
-                    Text("关闭")
+                    Text(if (store.isCheckingLogin.value) "检查中..." else "刷新状态")
                 }
             }
         }
-    )
+    }
 }
 
 @Composable
 private fun EncryptLoginDialog(store: ComposeMonitorStore) {
     val colors = MaterialTheme.colorScheme
-    AlertDialog(
-        onDismissRequest = { store.closeEncryptLoginDialog() },
-        title = { Text("用户登录") },
-        text = {
+    Card(
+        modifier = Modifier.width(380.dp),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "用户登录",
+                style = MaterialTheme.typography.headlineSmall,
+                color = colors.onSurface
+            )
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1463,24 +1707,26 @@ private fun EncryptLoginDialog(store: ComposeMonitorStore) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { store.encryptLogin() },
-                enabled = !store.isEncryptingPassword.value
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
             ) {
-                Text(if (store.isEncryptingPassword.value) "登录中..." else "登录")
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = { store.closeEncryptLoginDialog() },
-                enabled = !store.isEncryptingPassword.value
-            ) {
-                Text("关闭")
+                TextButton(
+                    onClick = { store.closeEncryptLoginDialog() },
+                    enabled = !store.isEncryptingPassword.value
+                ) {
+                    Text("关闭")
+                }
+                TextButton(
+                    onClick = { store.encryptLogin() },
+                    enabled = !store.isEncryptingPassword.value
+                ) {
+                    Text(if (store.isEncryptingPassword.value) "登录中..." else "登录")
+                }
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -1496,16 +1742,36 @@ private fun LoginInfoLine(label: String, value: String) {
 }
 
 @Composable
-private fun SettingsDialog(store: ComposeMonitorStore) {
-    AlertDialog(
-        onDismissRequest = { store.closeConfigDialog() },
-        title = { Text("配置") },
-        text = {
-            Column(
+private fun SettingsPanel(store: ComposeMonitorStore) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier
+            .width(420.dp)
+            .fillMaxHeight(),
+        color = colors.surface,
+        shadowElevation = 8.dp
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("编辑配置", style = MaterialTheme.typography.titleLarge)
+                TextButton(onClick = { store.closeSettingsPanel() }) {
+                    Text("✕")
+                }
+            }
+            HorizontalDivider(color = colors.outline.copy(alpha = 0.25f))
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 OutlinedTextField(
                     value = store.serverUrlInput.value,
@@ -1536,26 +1802,40 @@ private fun SettingsDialog(store: ComposeMonitorStore) {
                     Text("仅上传 PDF 文件")
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val err = store.saveConfigFromDialog()
-                    if (err != null) {
-                        store.updateStatus(err)
-                        store.addLog("配置保存失败: $err")
-                    }
-                }
+
+            HorizontalDivider(color = colors.outline.copy(alpha = 0.25f))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("保存")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = { store.closeConfigDialog() }) {
-                Text("取消")
+                OutlinedButton(
+                    onClick = { store.closeSettingsPanel() },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("取消")
+                }
+                Button(
+                    onClick = {
+                        val err = store.saveConfigFromDialog()
+                        if (err != null) {
+                            store.showSnackbar("配置保存失败: $err")
+                        } else {
+                            store.closeSettingsPanel()
+                            store.showSnackbar("配置已保存")
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("保存")
+                }
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -1769,6 +2049,45 @@ fun startComposeApp() = application {
             exitApplication()
         }
     ) {
+        DisposableEffect(Unit) {
+            DropTarget(window, object : DropTargetAdapter() {
+                override fun dragEnter(dtde: java.awt.dnd.DropTargetDragEvent?) {
+                    dtde?.acceptDrag(DnDConstants.ACTION_COPY)
+                    store.isDragOver.value = true
+                }
+
+                override fun dragExit(dte: java.awt.dnd.DropTargetEvent?) {
+                    store.isDragOver.value = false
+                }
+
+                override fun drop(dtde: DropTargetDropEvent?) {
+                    store.isDragOver.value = false
+                    dtde ?: return
+                    dtde.acceptDrop(DnDConstants.ACTION_COPY)
+                    try {
+                        val transferable = dtde.transferable
+                        if (transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+                            val files = transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
+                            val paths = files?.filterIsInstance<File>()?.map { it.absolutePath } ?: emptyList()
+                            if (paths.isNotEmpty()) {
+                                store.addFolderFromDrop(paths)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        store.addLog("拖拽处理失败: ${e.message}")
+                    } finally {
+                        dtde.dropComplete(true)
+                    }
+                }
+            })
+            onDispose {
+                try {
+                    window.dropTarget = null
+                } catch (_: Exception) {
+                }
+            }
+        }
+
         DisposableEffect(Unit) {
             onDispose {
                 store.shutdown()
