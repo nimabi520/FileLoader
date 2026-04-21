@@ -3,6 +3,8 @@ package topview.fileloader.config;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -37,6 +39,8 @@ public class AppConfig {
 
     // 默认用户Id
     public static String userId = DEFAULT_USER_ID;
+    // 加密后的密码
+    public static String encryptedPassword = "";
 
     static {
         // 类加载时自动读取配置
@@ -59,6 +63,7 @@ public class AppConfig {
         }
 
         userId = properties.getProperty("user.id", DEFAULT_USER_ID);
+        encryptedPassword = properties.getProperty("user.encryptedPassword", "");
     }
 
     /**
@@ -67,6 +72,7 @@ public class AppConfig {
     public static void saveConfig() {
         ensureConfigDirectory();
         properties.setProperty("user.id", userId);
+        properties.setProperty("user.encryptedPassword", encryptedPassword);
         try (OutputStream fos = Files.newOutputStream(CONFIG_FILE)) {
             properties.store(fos, "FileLoader Configuration");
             logger.info("Configuration saved to " + CONFIG_FILE);
@@ -85,7 +91,9 @@ public class AppConfig {
         properties.setProperty("timeout.write", String.valueOf(DEFAULT_WRITE_TIMEOUT));
         properties.setProperty("filter.onlyPdf", String.valueOf(DEFAULT_ONLY_UPLOAD_PDF));
         properties.setProperty("user.id", DEFAULT_USER_ID);
+        properties.setProperty("user.encryptedPassword", "");
         userId = DEFAULT_USER_ID;
+        encryptedPassword = "";
     }
 
     // --- Getter 方法，如果配置不存在则返回默认值 ---
@@ -166,6 +174,39 @@ public class AppConfig {
         userId = (value == null || value.isBlank()) ? DEFAULT_USER_ID : value.trim();
         properties.setProperty("user.id", userId);
         saveConfig();
+    }
+
+    public static String getEncryptedPassword() {
+        return encryptedPassword;
+    }
+
+    public static void setEncryptedPassword(String value) {
+        encryptedPassword = value == null ? "" : value;
+        properties.setProperty("user.encryptedPassword", encryptedPassword);
+        saveConfig();
+    }
+
+    public static void clearEncryptedPassword() {
+        encryptedPassword = "";
+        properties.setProperty("user.encryptedPassword", "");
+        saveConfig();
+    }
+
+    /**
+     * 若已保存加密密码，在 URL 后追加 userId 和 password query 参数。
+     */
+    public static String appendAuthQueryParams(String url) {
+        String pwd = encryptedPassword;
+        if (pwd == null || pwd.isBlank()) {
+            return url;
+        }
+        String uid = userId;
+        if (uid == null || uid.isBlank()) {
+            return url;
+        }
+        String sep = url.contains("?") ? "&" : "?";
+        return url + sep + "userId=" + URLEncoder.encode(uid, StandardCharsets.UTF_8)
+                + "&password=" + URLEncoder.encode(pwd, StandardCharsets.UTF_8);
     }
 
     private static void ensureConfigDirectory() {

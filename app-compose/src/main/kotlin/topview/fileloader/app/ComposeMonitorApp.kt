@@ -4,8 +4,10 @@ import topview.fileloader.config.AppConfig
 import topview.fileloader.monitor.FileMonitor
 import topview.fileloader.monitor.MonitorCallbacks
 import topview.fileloader.persistence.BatchDatabase
+import topview.fileloader.service.AuthStatusService
 import topview.fileloader.service.BatchStatusService
 import topview.fileloader.service.DownloadService
+import topview.fileloader.service.EncryptPasswordService
 import topview.fileloader.service.ProgressUploadService
 import topview.fileloader.util.ArchiveExtractor
 
@@ -53,6 +55,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -66,6 +69,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -132,6 +136,18 @@ private class ComposeMonitorStore : MonitorCallbacks {
     @Volatile
     private var batchStartTime: Long = 0
 
+    @Volatile
+    private var loginCheckInFlight = false
+
+    @Volatile
+    private var logoutInFlight = false
+
+    @Volatile
+    private var loggedInFlag = false
+
+    @Volatile
+    private var lastLoginBlockLogAt = 0L
+
     private val fileMonitor = FileMonitor(this)
 
     val folderInput = mutableStateOf("")
@@ -139,10 +155,25 @@ private class ComposeMonitorStore : MonitorCallbacks {
     val statusText = mutableStateOf("状态: 等待监控...")
     val autoRefreshLabel = mutableStateOf("手动刷新")
     val showSettingsDialog = mutableStateOf(false)
+    val showLoginDialog = mutableStateOf(false)
+    val showEncryptLoginDialog = mutableStateOf(false)
     val serverUrlInput = mutableStateOf("")
     val connectTimeoutInput = mutableStateOf("")
     val readTimeoutInput = mutableStateOf("")
     val onlyPdfInput = mutableStateOf(false)
+    val isCheckingLogin = mutableStateOf(false)
+    val isLoggingOut = mutableStateOf(false)
+    val isLoggedIn = mutableStateOf(false)
+    val loginDialogMessage = mutableStateOf("尚未检查登录状态")
+    val loginUserId = mutableStateOf("")
+    val loginUserName = mutableStateOf("")
+    val loginRole = mutableStateOf(0)
+    val loginSessionId = mutableStateOf("")
+    val loginTime = mutableStateOf("")
+    val encryptLoginUserIdInput = mutableStateOf("")
+    val encryptLoginPasswordInput = mutableStateOf("")
+    val isEncryptingPassword = mutableStateOf(false)
+    val encryptLoginErrorMessage = mutableStateOf("")
 
     val monitoredFoldersUi = mutableStateListOf<String>()
     val uploadRecords = mutableStateListOf<UploadRecordUi>()
@@ -151,6 +182,9 @@ private class ComposeMonitorStore : MonitorCallbacks {
     val progressMap = mutableStateMapOf<String, Int>()
 
     init {
+        if (AppConfig.getEncryptedPassword().isNotBlank()) {
+            loggedInFlag = true
+        }
         BatchDatabase.init()
         reloadConfigDraft()
         loadBatchHistory()
@@ -198,6 +232,9 @@ private class ComposeMonitorStore : MonitorCallbacks {
     }
 
     fun addFolderFromInput() {
+        if (!ensureLoggedIn("添加监控文件夹")) {
+            return
+        }
         addFolder(folderInput.value)
         folderInput.value = ""
     }
@@ -332,6 +369,271 @@ private class ComposeMonitorStore : MonitorCallbacks {
         showSettingsDialog.value = false
     }
 
+    fun openLoginDialog() {
+        showLoginDialog.value = true
+    }
+
+    fun closeLoginDialog() {
+        showLoginDialog.value = false
+    }
+
+    fun openEncryptLoginDialog() {
+        encryptLoginUserIdInput.value = AppConfig.getUserId()
+        encryptLoginPasswordInput.value = ""
+        encryptLoginErrorMessage.value = ""
+        showEncryptLoginDialog.value = true
+    }
+
+    fun closeEncryptLoginDialog() {
+        showEncryptLoginDialog.value = false
+        encryptLoginErrorMessage.value = ""
+    }
+
+    fun logout(triggerSource: String = "手动退出登录") {
+        if (closed.get()) {
+            return
+        }
+        if (logoutInFlight || loginCheckInFlight) {
+            return
+        }
+        logoutInFlight = true
+
+        onUi {
+            isLoggingOut.value = true
+            loginDialogMessage.value = "正在退出登录..."
+        }
+
+        batchQueryExecutor.submit {
+            try {
+                val result = AuthStatusService.logout()
+                val message = when (result.state) {
+                    AuthStatusService.LogoutState.SUCCESS -> {
+                        loggedInFlag = false
+                        AppConfig.clearEncryptedPassword()
+                        onUi {
+                            isLoggedIn.value = false
+                            clearLoginIdentityUiState()
+                            loginDialogMessage.value = if (result.message.isBlank()) "已退出登录" else result.message
+                            showLoginDialog.value = true
+                        }
+                        if (result.message.isBlank()) "退出登录成功" else result.message
+                    }
+
+                    AuthStatusService.LogoutState.UNAUTHORIZED -> {
+                        loggedInFlag = false
+                        AppConfig.clearEncryptedPassword()
+                        onUi {
+                            isLoggedIn.value = false
+                            clearLoginIdentityUiState()
+                            loginDialogMessage.value = if (result.message.isBlank()) "当前未登录" else result.message
+                            showLoginDialog.value = true
+                        }
+                        if (result.message.isBlank()) "当前未登录" else result.message
+                    }
+
+                    AuthStatusService.LogoutState.NETWORK_ERROR -> {
+                        onUi {
+                            loginDialogMessage.value = if (result.message.isBlank()) "网络异常，退出登录失败" else result.message
+                            showLoginDialog.value = true
+                        }
+                        if (result.message.isBlank()) "退出登录失败: 网络异常" else "退出登录失败: ${result.message}"
+                    }
+
+                    AuthStatusService.LogoutState.SERVER_ERROR -> {
+                        onUi {
+                            loginDialogMessage.value = if (result.message.isBlank()) "服务异常，退出登录失败" else result.message
+                            showLoginDialog.value = true
+                        }
+                        if (result.message.isBlank()) "退出登录失败: 服务异常" else "退出登录失败: ${result.message}"
+                    }
+
+                    null -> {
+                        onUi {
+                            loginDialogMessage.value = "退出登录结果未知"
+                            showLoginDialog.value = true
+                        }
+                        "退出登录结果未知"
+                    }
+                }
+
+                onUi {
+                    statusText.value = message
+                }
+                addLog("[$triggerSource] $message")
+            } finally {
+                logoutInFlight = false
+                onUi {
+                    isLoggingOut.value = false
+                }
+            }
+        }
+    }
+
+    fun encryptLogin() {
+        if (closed.get()) {
+            return
+        }
+        val userId = encryptLoginUserIdInput.value.trim()
+        val password = encryptLoginPasswordInput.value
+        if (userId.isBlank() || password.isBlank()) {
+            encryptLoginErrorMessage.value = "请输入用户ID和密码"
+            return
+        }
+
+        isEncryptingPassword.value = true
+        encryptLoginErrorMessage.value = ""
+
+        batchQueryExecutor.submit {
+            try {
+                val result = EncryptPasswordService.encryptPassword(userId, password)
+                when (result.state) {
+                    EncryptPasswordService.State.SUCCESS -> {
+                        val encryptedPwd = result.encryptedPassword
+                        AppConfig.setUserId(userId)
+                        AppConfig.setEncryptedPassword(encryptedPwd)
+                        loggedInFlag = true
+                        onUi {
+                            isLoggedIn.value = true
+                            closeEncryptLoginDialog()
+                        }
+                        addLog("[登录成功] 用户ID: $userId")
+                        checkLoginStatus("登录后检查", openDialogOnUnauthorized = false)
+                    }
+                    EncryptPasswordService.State.NETWORK_ERROR,
+                    EncryptPasswordService.State.SERVER_ERROR,
+                    EncryptPasswordService.State.PARSE_ERROR -> {
+                        onUi {
+                            encryptLoginErrorMessage.value = result.message
+                        }
+                        addLog("[登录失败] ${result.message}")
+                    }
+                    null -> {
+                        onUi {
+                            encryptLoginErrorMessage.value = "登录结果未知"
+                        }
+                        addLog("[登录失败] 结果未知")
+                    }
+                }
+            } finally {
+                onUi {
+                    isEncryptingPassword.value = false
+                }
+            }
+        }
+    }
+
+    fun checkLoginStatus(triggerSource: String = "手动检查", openDialogOnUnauthorized: Boolean = false) {
+        if (closed.get()) {
+            return
+        }
+        if (loginCheckInFlight || logoutInFlight) {
+            return
+        }
+        loginCheckInFlight = true
+
+        onUi {
+            isCheckingLogin.value = true
+            loginDialogMessage.value = "正在检查登录状态..."
+        }
+
+        batchQueryExecutor.submit {
+            try {
+                val result = AuthStatusService.queryLoginStatus()
+                val message = when (result.state) {
+                    AuthStatusService.State.LOGGED_IN -> {
+                        val user = result.user
+                        loggedInFlag = true
+                        onUi {
+                            isLoggedIn.value = true
+                            loginDialogMessage.value = "登录有效"
+                            fillLoginIdentityUiState(
+                                user?.userId ?: "",
+                                user?.name ?: "",
+                                user?.role ?: 0,
+                                user?.sessionId ?: "",
+                                user?.loginTime ?: ""
+                            )
+                            showLoginDialog.value = if (showLoginDialog.value) true else false
+                        }
+                        val displayName = if (!user?.name.isNullOrBlank()) user?.name else user?.userId
+                        "登录状态正常${if (displayName.isNullOrBlank()) "" else "，当前用户: $displayName"}"
+                    }
+
+                    AuthStatusService.State.UNAUTHORIZED -> {
+                        val hasEncryptedPassword = AppConfig.getEncryptedPassword().isNotBlank()
+                        if (!hasEncryptedPassword) {
+                            loggedInFlag = false
+                        }
+                        onUi {
+                            if (!hasEncryptedPassword) {
+                                isLoggedIn.value = false
+                                clearLoginIdentityUiState()
+                            }
+                            loginDialogMessage.value = when (result.httpCode) {
+                                401 -> "未登录或登录已过期 (HTTP 401)"
+                                403 -> "无访问权限 (HTTP 403)"
+                                else -> if (result.message.isBlank()) "当前未登录" else result.message
+                            }
+                            if (openDialogOnUnauthorized && !hasEncryptedPassword) {
+                                showLoginDialog.value = true
+                            }
+                        }
+                        "登录校验失败: ${if (result.message.isBlank()) "当前未登录" else result.message}"
+                    }
+
+                    AuthStatusService.State.NETWORK_ERROR -> {
+                        loggedInFlag = false
+                        onUi {
+                            isLoggedIn.value = false
+                            loginDialogMessage.value = if (result.message.isBlank()) "网络异常，请检查服务器地址和网络连接" else result.message
+                        }
+                        "登录状态查询网络异常: ${if (result.message.isBlank()) "请检查网络" else result.message}"
+                    }
+
+                    AuthStatusService.State.SERVER_ERROR -> {
+                        loggedInFlag = false
+                        onUi {
+                            isLoggedIn.value = false
+                            loginDialogMessage.value = if (result.message.isBlank()) "服务异常，请稍后重试" else result.message
+                            if (openDialogOnUnauthorized && (result.httpCode == 401 || result.httpCode == 403)) {
+                                showLoginDialog.value = true
+                            }
+                        }
+                        "登录状态查询失败: ${if (result.message.isBlank()) "服务异常" else result.message}"
+                    }
+
+                    AuthStatusService.State.PARSE_ERROR -> {
+                        loggedInFlag = false
+                        onUi {
+                            isLoggedIn.value = false
+                            loginDialogMessage.value = if (result.message.isBlank()) "响应解析失败" else result.message
+                        }
+                        "登录状态解析失败: ${if (result.message.isBlank()) "响应结构异常" else result.message}"
+                    }
+
+                    null -> {
+                        loggedInFlag = false
+                        onUi {
+                            isLoggedIn.value = false
+                            loginDialogMessage.value = "登录状态未知"
+                        }
+                        "登录状态未知: 返回了空状态"
+                    }
+                }
+
+                onUi {
+                    statusText.value = message
+                }
+                addLog("[$triggerSource] $message")
+            } finally {
+                loginCheckInFlight = false
+                onUi {
+                    isCheckingLogin.value = false
+                }
+            }
+        }
+    }
+
     fun saveConfigFromDialog(): String? {
         val serverUrl = serverUrlInput.value.trim()
         if (serverUrl.isEmpty()) {
@@ -446,6 +748,10 @@ private class ComposeMonitorStore : MonitorCallbacks {
     }
 
     override fun uploadFile(filePath: String) {
+        if (!ensureLoggedIn("上传文件")) {
+            return
+        }
+
         val file = File(filePath)
         if (!file.exists() || !file.isFile) {
             logger.warning("File not found or invalid: $filePath")
@@ -626,6 +932,52 @@ private class ComposeMonitorStore : MonitorCallbacks {
         }
     }
 
+    private fun ensureLoggedIn(actionName: String): Boolean {
+        if (logoutInFlight) {
+            val message = "正在退出登录，请稍后重试"
+            updateStatus(message)
+            addLog(message)
+            onUi {
+                openEncryptLoginDialog()
+            }
+            return false
+        }
+
+        if (loggedInFlag) {
+            return true
+        }
+
+        val now = System.currentTimeMillis()
+        if (now - lastLoginBlockLogAt >= 5000) {
+            lastLoginBlockLogAt = now
+            val message = "未登录，无法${actionName}，请先完成登录"
+            updateStatus(message)
+            addLog(message)
+        }
+        onUi {
+            openEncryptLoginDialog()
+        }
+        return false
+    }
+
+    private fun clearLoginIdentityUiState() {
+        fillLoginIdentityUiState("", "", 0, "", "")
+    }
+
+    private fun fillLoginIdentityUiState(
+        userId: String,
+        userName: String,
+        role: Int,
+        sessionId: String,
+        loginAt: String
+    ) {
+        loginUserId.value = userId
+        loginUserName.value = userName
+        loginRole.value = role
+        loginSessionId.value = sessionId
+        loginTime.value = loginAt
+    }
+
     private fun chooseDirectory(title: String): File? {
         // 使用FileDialog获得原生文件选择器体验
         // 在macOS上需要设置系统属性才能选择目录
@@ -748,6 +1100,14 @@ private fun ComposeMonitorScreen(store: ComposeMonitorStore) {
             .fillMaxSize()
             .background(background)
     ) {
+        if (store.showLoginDialog.value) {
+            LoginStatusDialog(store)
+        }
+
+        if (store.showEncryptLoginDialog.value) {
+            EncryptLoginDialog(store)
+        }
+
         if (store.showSettingsDialog.value) {
             SettingsDialog(store)
         }
@@ -772,6 +1132,23 @@ private fun ComposeMonitorScreen(store: ComposeMonitorStore) {
                         style = MaterialTheme.typography.bodyLarge,
                         color = colors.onSurfaceVariant
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (store.isCheckingLogin.value) {
+                            "登录状态: 检查中..."
+                        } else if (store.isLoggedIn.value) {
+                            val display = if (store.loginUserName.value.isNotBlank()) {
+                                "${store.loginUserName.value} (${store.loginUserId.value.ifBlank { "未知用户" }})"
+                            } else {
+                                store.loginUserId.value.ifBlank { "未知用户" }
+                            }
+                            "登录状态: 已登录 · $display"
+                        } else {
+                            "登录状态: 未登录"
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (store.isLoggedIn.value) colors.secondary else colors.error
+                    )
 
                     Spacer(modifier = Modifier.height(14.dp))
 
@@ -794,6 +1171,7 @@ private fun ComposeMonitorScreen(store: ComposeMonitorStore) {
                         Spacer(modifier = Modifier.width(10.dp))
                         Button(
                             onClick = { store.addFolderFromInput() },
+                            enabled = store.isLoggedIn.value,
                             shape = RoundedCornerShape(14.dp)
                         ) {
                             Text("添加文件夹")
@@ -803,6 +1181,19 @@ private fun ComposeMonitorScreen(store: ComposeMonitorStore) {
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                store.openLoginDialog()
+                                store.checkLoginStatus("手动检查", openDialogOnUnauthorized = true)
+                            },
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text(
+                                if (store.isCheckingLogin.value) "登录状态: 检查中"
+                                else if (store.isLoggedIn.value) "登录状态: 已登录"
+                                else "登录状态: 未登录"
+                            )
+                        }
                         OutlinedButton(
                             onClick = { store.removeSelectedFolder() },
                             enabled = store.selectedFolder.value != null,
@@ -961,6 +1352,146 @@ private fun ComposeMonitorScreen(store: ComposeMonitorStore) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun LoginStatusDialog(store: ComposeMonitorStore) {
+    val colors = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = { store.closeLoginDialog() },
+        title = { Text("登录状态") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (store.isLoggingOut.value) {
+                    Text("正在退出登录...", color = colors.onSurfaceVariant)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                } else if (store.isCheckingLogin.value) {
+                    Text("正在检查登录状态...", color = colors.onSurfaceVariant)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                } else if (store.isLoggedIn.value) {
+                    LoginInfoLine("用户ID", store.loginUserId.value.ifBlank { "-" })
+                    LoginInfoLine("姓名", store.loginUserName.value.ifBlank { "-" })
+                    LoginInfoLine("角色", if (store.loginRole.value == 1) "管理员" else "普通用户")
+                    LoginInfoLine("Session", store.loginSessionId.value.ifBlank { "-" })
+                    LoginInfoLine("登录时间", store.loginTime.value.ifBlank { "-" })
+                } else {
+                    Text(
+                        text = store.loginDialogMessage.value,
+                        color = colors.error,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "请先完成认证登录后再开始监控与上传。",
+                        color = colors.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { store.checkLoginStatus("弹窗刷新", openDialogOnUnauthorized = true) },
+                enabled = !store.isCheckingLogin.value && !store.isLoggingOut.value
+            ) {
+                Text(if (store.isCheckingLogin.value) "检查中..." else "刷新状态")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (store.isLoggedIn.value) {
+                    TextButton(
+                        onClick = { store.logout("弹窗退出登录") },
+                        enabled = !store.isLoggingOut.value && !store.isCheckingLogin.value
+                    ) {
+                        Text(if (store.isLoggingOut.value) "退出中..." else "退出登录")
+                    }
+                }
+                TextButton(
+                    onClick = { store.closeLoginDialog() },
+                    enabled = !store.isLoggingOut.value
+                ) {
+                    Text("关闭")
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun EncryptLoginDialog(store: ComposeMonitorStore) {
+    val colors = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = { store.closeEncryptLoginDialog() },
+        title = { Text("用户登录") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = store.encryptLoginUserIdInput.value,
+                    onValueChange = { store.encryptLoginUserIdInput.value = it },
+                    label = { Text("用户ID") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !store.isEncryptingPassword.value
+                )
+                OutlinedTextField(
+                    value = store.encryptLoginPasswordInput.value,
+                    onValueChange = { store.encryptLoginPasswordInput.value = it },
+                    label = { Text("密码") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !store.isEncryptingPassword.value
+                )
+                if (store.encryptLoginErrorMessage.value.isNotBlank()) {
+                    Text(
+                        text = store.encryptLoginErrorMessage.value,
+                        color = colors.error,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                if (store.isEncryptingPassword.value) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { store.encryptLogin() },
+                enabled = !store.isEncryptingPassword.value
+            ) {
+                Text(if (store.isEncryptingPassword.value) "登录中..." else "登录")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = { store.closeEncryptLoginDialog() },
+                enabled = !store.isEncryptingPassword.value
+            ) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
+@Composable
+private fun LoginInfoLine(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "$label:",
+            modifier = Modifier.width(72.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(text = value, modifier = Modifier.weight(1f))
     }
 }
 
@@ -1241,6 +1772,14 @@ fun startComposeApp() = application {
         DisposableEffect(Unit) {
             onDispose {
                 store.shutdown()
+            }
+        }
+
+        LaunchedEffect(Unit) {
+            if (AppConfig.getEncryptedPassword().isBlank()) {
+                store.openEncryptLoginDialog()
+            } else {
+                store.checkLoginStatus("启动检查", openDialogOnUnauthorized = false)
             }
         }
 

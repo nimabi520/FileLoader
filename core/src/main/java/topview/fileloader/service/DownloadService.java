@@ -55,7 +55,7 @@ public class DownloadService {
             serverUrl += "/";
         }
         
-        String urlStr = serverUrl + endpoint;
+        String urlStr = AppConfig.appendAuthQueryParams(serverUrl + endpoint);
         logger.info("Download URL: " + urlStr);
         
         try {

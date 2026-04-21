@@ -96,6 +96,12 @@ public class ProgressUploadService {
                         queryParams.append("&");
                     queryParams.append("batchId=").append(java.net.URLEncoder.encode(batchId, StandardCharsets.UTF_8));
                 }
+                String encryptedPassword = AppConfig.getEncryptedPassword();
+                if (encryptedPassword != null && !encryptedPassword.isBlank()) {
+                    if (queryParams.length() > 0)
+                        queryParams.append("&");
+                    queryParams.append("password=").append(java.net.URLEncoder.encode(encryptedPassword, StandardCharsets.UTF_8));
+                }
                 if (queryParams.length() > 0) {
                     urlStr += "?" + queryParams.toString();
                 }

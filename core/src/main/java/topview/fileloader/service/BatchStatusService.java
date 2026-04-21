@@ -100,7 +100,7 @@ public class BatchStatusService {
      */
     public static BatchStatusResult fetchBatchStatus(String batchId) {
         String encodedId = URLEncoder.encode(batchId.trim(), StandardCharsets.UTF_8);
-        String urlStr = buildBaseUrl() + "batch/" + encodedId + "/batchStatus";
+        String urlStr = AppConfig.appendAuthQueryParams(buildBaseUrl() + "batch/" + encodedId + "/batchStatus");
         logger.info("Querying batchStatus: " + urlStr);
         try {
             HttpURLConnection conn = openConnection(urlStr);
@@ -141,7 +141,7 @@ public class BatchStatusService {
      */
     public static String downloadBatchResult(String batchId, File saveDir) {
         String encodedId = URLEncoder.encode(batchId.trim(), StandardCharsets.UTF_8);
-        String urlStr = buildBaseUrl() + "batch/" + encodedId + "/batchResult";
+        String urlStr = AppConfig.appendAuthQueryParams(buildBaseUrl() + "batch/" + encodedId + "/batchResult");
         logger.info("Downloading batchResult: " + urlStr);
         try {
             HttpURLConnection conn = openConnection(urlStr);
