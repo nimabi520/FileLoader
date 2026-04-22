@@ -69,7 +69,10 @@ public class ProgressUploadService {
      */
     public static UploadResponse uploadFile(File file, String batchId, Consumer<Integer> progressCallback) {
         if (batchId == null || batchId.isEmpty()) {
-            batchId = String.valueOf(System.currentTimeMillis());
+            UploadResponse errorResponse = new UploadResponse();
+            errorResponse.setCode(400);
+            errorResponse.setMessage("batchId 不能为空");
+            return errorResponse;
         }
         String userId = AppConfig.userId;
         // 最多尝试 MAX_RETRIES 次上传

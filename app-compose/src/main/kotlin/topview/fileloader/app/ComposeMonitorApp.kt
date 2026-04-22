@@ -6,7 +6,7 @@ import topview.fileloader.config.AppConfig
 import topview.fileloader.monitor.FileMonitor
 import topview.fileloader.monitor.MonitorCallbacks
 import topview.fileloader.persistence.BatchDatabase
-import topview.fileloader.service.AuthStatusService
+import topview.fileloader.service.BatchIdService
 import topview.fileloader.service.BatchStatusService
 import topview.fileloader.service.DownloadService
 import topview.fileloader.service.EncryptPasswordService
@@ -216,13 +216,19 @@ private class ComposeMonitorStore : MonitorCallbacks {
     val progressMap = mutableStateMapOf<String, Int>()
 
     init {
-        if (AppConfig.getEncryptedPassword().isNotBlank()) {
-            loggedInFlag = true
-        }
+        restoreLoginState()
         BatchDatabase.init()
         reloadConfigDraft()
         loadBatchHistory()
         startUploadWorker()
+    }
+
+    fun restoreLoginState() {
+        if (AppConfig.getEncryptedPassword().isNotBlank()) {
+            loggedInFlag = true
+            isLoggedIn.value = true
+            loginDialogMessage.value = "凭据已恢复，登录有效"
+        }
     }
 
     fun shutdown() {
@@ -317,7 +323,13 @@ private class ComposeMonitorStore : MonitorCallbacks {
      * 处理压缩包上传：解压并逐个上传内部文件
      */
     private fun handleArchiveUpload(archiveFile: File) {
-        val batchId = System.currentTimeMillis().toString()
+        val result = BatchIdService.fetchBatchId()
+        if (result.code != 200 || result.batchId.isNullOrEmpty()) {
+            addLog("获取批次ID失败: ${result.msg}")
+            updateStatus("获取批次ID失败")
+            return
+        }
+        val batchId = result.batchId
         addLog("检测到压缩包: ${archiveFile.name}")
         updateStatus("正在解压: ${archiveFile.name}")
 
@@ -471,61 +483,16 @@ private class ComposeMonitorStore : MonitorCallbacks {
 
         batchQueryExecutor.submit {
             try {
-                val result = AuthStatusService.logout()
-                if (result.state == AuthStatusService.LogoutState.SUCCESS ||
-                    result.state == AuthStatusService.LogoutState.UNAUTHORIZED) {
-                    showSnackbar("已退出登录")
+                loggedInFlag = false
+                AppConfig.clearEncryptedPassword()
+                onUi {
+                    isLoggedIn.value = false
+                    clearLoginIdentityUiState()
+                    loginDialogMessage.value = "已退出登录"
+                    showLoginDialog.value = true
                 }
-                val message = when (result.state) {
-                    AuthStatusService.LogoutState.SUCCESS -> {
-                        loggedInFlag = false
-                        AppConfig.clearEncryptedPassword()
-                        onUi {
-                            isLoggedIn.value = false
-                            clearLoginIdentityUiState()
-                            loginDialogMessage.value = if (result.message.isBlank()) "已退出登录" else result.message
-                            showLoginDialog.value = true
-                        }
-                        if (result.message.isBlank()) "退出登录成功" else result.message
-                    }
-
-                    AuthStatusService.LogoutState.UNAUTHORIZED -> {
-                        loggedInFlag = false
-                        AppConfig.clearEncryptedPassword()
-                        onUi {
-                            isLoggedIn.value = false
-                            clearLoginIdentityUiState()
-                            loginDialogMessage.value = if (result.message.isBlank()) "当前未登录" else result.message
-                            showLoginDialog.value = true
-                        }
-                        if (result.message.isBlank()) "当前未登录" else result.message
-                    }
-
-                    AuthStatusService.LogoutState.NETWORK_ERROR -> {
-                        onUi {
-                            loginDialogMessage.value = if (result.message.isBlank()) "网络异常，退出登录失败" else result.message
-                            showLoginDialog.value = true
-                        }
-                        if (result.message.isBlank()) "退出登录失败: 网络异常" else "退出登录失败: ${result.message}"
-                    }
-
-                    AuthStatusService.LogoutState.SERVER_ERROR -> {
-                        onUi {
-                            loginDialogMessage.value = if (result.message.isBlank()) "服务异常，退出登录失败" else result.message
-                            showLoginDialog.value = true
-                        }
-                        if (result.message.isBlank()) "退出登录失败: 服务异常" else "退出登录失败: ${result.message}"
-                    }
-
-                    null -> {
-                        onUi {
-                            loginDialogMessage.value = "退出登录结果未知"
-                            showLoginDialog.value = true
-                        }
-                        "退出登录结果未知"
-                    }
-                }
-
+                showSnackbar("退出登录成功")
+                val message = "退出登录成功"
                 onUi {
                     statusText.value = message
                 }
@@ -568,7 +535,6 @@ private class ComposeMonitorStore : MonitorCallbacks {
                         }
                         addLog("[登录成功] 用户ID: $userId")
                         showSnackbar("登录成功")
-                        checkLoginStatus("登录后检查", openDialogOnUnauthorized = false)
                     }
                     EncryptPasswordService.State.NETWORK_ERROR,
                     EncryptPasswordService.State.SERVER_ERROR,
@@ -607,101 +573,36 @@ private class ComposeMonitorStore : MonitorCallbacks {
             loginDialogMessage.value = "正在检查登录状态..."
         }
 
-        batchQueryExecutor.submit {
-            try {
-                val result = AuthStatusService.queryLoginStatus()
-                val message = when (result.state) {
-                    AuthStatusService.State.LOGGED_IN -> {
-                        val user = result.user
-                        loggedInFlag = true
-                        onUi {
-                            isLoggedIn.value = true
-                            loginDialogMessage.value = "登录有效"
-                            fillLoginIdentityUiState(
-                                user?.userId ?: "",
-                                user?.name ?: "",
-                                user?.role ?: 0,
-                                user?.sessionId ?: "",
-                                user?.loginTime ?: ""
-                            )
-                            showLoginDialog.value = if (showLoginDialog.value) true else false
-                        }
-                        val displayName = if (!user?.name.isNullOrBlank()) user?.name else user?.userId
-                        "登录状态正常${if (displayName.isNullOrBlank()) "" else "，当前用户: $displayName"}"
-                    }
-
-                    AuthStatusService.State.UNAUTHORIZED -> {
-                        val hasEncryptedPassword = AppConfig.getEncryptedPassword().isNotBlank()
-                        if (!hasEncryptedPassword) {
-                            loggedInFlag = false
-                        }
-                        onUi {
-                            if (!hasEncryptedPassword) {
-                                isLoggedIn.value = false
-                                clearLoginIdentityUiState()
-                            }
-                            loginDialogMessage.value = when (result.httpCode) {
-                                401 -> "未登录或登录已过期 (HTTP 401)"
-                                403 -> "无访问权限 (HTTP 403)"
-                                else -> if (result.message.isBlank()) "当前未登录" else result.message
-                            }
-                            if (openDialogOnUnauthorized && !hasEncryptedPassword) {
-                                showLoginDialog.value = true
-                            }
-                        }
-                        "登录校验失败: ${if (result.message.isBlank()) "当前未登录" else result.message}"
-                    }
-
-                    AuthStatusService.State.NETWORK_ERROR -> {
-                        loggedInFlag = false
-                        onUi {
-                            isLoggedIn.value = false
-                            loginDialogMessage.value = if (result.message.isBlank()) "网络异常，请检查服务器地址和网络连接" else result.message
-                        }
-                        "登录状态查询网络异常: ${if (result.message.isBlank()) "请检查网络" else result.message}"
-                    }
-
-                    AuthStatusService.State.SERVER_ERROR -> {
-                        loggedInFlag = false
-                        onUi {
-                            isLoggedIn.value = false
-                            loginDialogMessage.value = if (result.message.isBlank()) "服务异常，请稍后重试" else result.message
-                            if (openDialogOnUnauthorized && (result.httpCode == 401 || result.httpCode == 403)) {
-                                showLoginDialog.value = true
-                            }
-                        }
-                        "登录状态查询失败: ${if (result.message.isBlank()) "服务异常" else result.message}"
-                    }
-
-                    AuthStatusService.State.PARSE_ERROR -> {
-                        loggedInFlag = false
-                        onUi {
-                            isLoggedIn.value = false
-                            loginDialogMessage.value = if (result.message.isBlank()) "响应解析失败" else result.message
-                        }
-                        "登录状态解析失败: ${if (result.message.isBlank()) "响应结构异常" else result.message}"
-                    }
-
-                    null -> {
-                        loggedInFlag = false
-                        onUi {
-                            isLoggedIn.value = false
-                            loginDialogMessage.value = "登录状态未知"
-                        }
-                        "登录状态未知: 返回了空状态"
-                    }
-                }
-
-                onUi {
-                    statusText.value = message
-                }
-                addLog("[$triggerSource] $message")
-            } finally {
-                loginCheckInFlight = false
-                onUi {
-                    isCheckingLogin.value = false
+        // 不再调用远程服务器验证登录，仅检查本地是否保存了加密密码
+        val hasEncryptedPassword = AppConfig.getEncryptedPassword().isNotBlank()
+        val message = if (hasEncryptedPassword) {
+            loggedInFlag = true
+            onUi {
+                isLoggedIn.value = true
+                loginDialogMessage.value = "登录有效"
+                val uid = AppConfig.getUserId()
+                if (uid.isNotBlank()) {
+                    loginUserId.value = uid
                 }
             }
+            "登录状态正常，凭据已保存"
+        } else {
+            loggedInFlag = false
+            onUi {
+                isLoggedIn.value = false
+                clearLoginIdentityUiState()
+                loginDialogMessage.value = "当前未登录"
+            }
+            "当前未登录"
+        }
+
+        onUi {
+            statusText.value = message
+        }
+        addLog("[$triggerSource] $message")
+        loginCheckInFlight = false
+        onUi {
+            isCheckingLogin.value = false
         }
     }
 
@@ -834,7 +735,13 @@ private class ComposeMonitorStore : MonitorCallbacks {
         synchronized(this) {
             val now = System.currentTimeMillis()
             if (currentBatchId == null || now - batchStartTime > 5000) {
-                currentBatchId = now.toString()
+                val result = BatchIdService.fetchBatchId()
+                if (result.code != 200 || result.batchId.isNullOrEmpty()) {
+                    addLog("获取批次ID失败: ${result.msg}")
+                    updateStatus("获取批次ID失败")
+                    return
+                }
+                currentBatchId = result.batchId
                 batchStartTime = now
             }
             batchId = currentBatchId!!
@@ -1016,10 +923,17 @@ private class ComposeMonitorStore : MonitorCallbacks {
             return false
         }
 
-        if (loggedInFlag) {
+        val hasEncryptedPassword = AppConfig.getEncryptedPassword().isNotBlank()
+        if (hasEncryptedPassword) {
+            if (!loggedInFlag) {
+                loggedInFlag = true
+                isLoggedIn.value = true
+            }
             return true
         }
 
+        loggedInFlag = false
+        isLoggedIn.value = false
         val now = System.currentTimeMillis()
         if (now - lastLoginBlockLogAt >= 5000) {
             lastLoginBlockLogAt = now
@@ -1227,7 +1141,7 @@ private fun ComposeMonitorScreen(store: ComposeMonitorStore) {
                             OutlinedTextField(
                                 value = store.folderInput.value,
                                 onValueChange = { store.folderInput.value = it },
-                                label = { Text("文件夹路径") },
+                                label = { Text("文件夹路径/拖动要上传的文件夹到窗口") },
                                 singleLine = true,
                                 shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier.weight(1f)
@@ -2095,10 +2009,9 @@ fun startComposeApp() = application {
         }
 
         LaunchedEffect(Unit) {
+            store.restoreLoginState()
             if (AppConfig.getEncryptedPassword().isBlank()) {
                 store.openEncryptLoginDialog()
-            } else {
-                store.checkLoginStatus("启动检查", openDialogOnUnauthorized = false)
             }
         }
 
