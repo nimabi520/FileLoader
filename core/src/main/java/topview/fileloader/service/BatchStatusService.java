@@ -8,6 +8,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
@@ -152,9 +153,33 @@ public class BatchStatusService {
                 String disposition = conn.getHeaderField("Content-Disposition");
                 String fileName = "batch_" + batchId + "_result.xlsx";
                 if (disposition != null) {
-                    int idx = disposition.indexOf("filename=");
-                    if (idx >= 0) {
-                        fileName = disposition.substring(idx + 9).replaceAll("\"", "").trim();
+                    // 处理 RFC 5987 编码格式：filename*=UTF-8''encoded-filename
+                    int rfc5987Idx = disposition.indexOf("filename*=");
+                    if (rfc5987Idx >= 0) {
+                        String encodedPart = disposition.substring(rfc5987Idx + 10).trim();
+                        // 提取 UTF-8'' 之后的实际文件名
+                        int quoteIdx = encodedPart.indexOf("''");
+                        if (quoteIdx >= 0) {
+                            fileName = encodedPart.substring(quoteIdx + 2);
+                            // 处理 URL 编码的文件名
+                            try {
+                                fileName = URLDecoder.decode(fileName, StandardCharsets.UTF_8);
+                            } catch (Exception e) {
+                                // 如果解码失败，使用原始值
+                            }
+                        }
+                    } else {
+                        // 处理标准格式：filename="filename.xlsx"
+                        int idx = disposition.indexOf("filename=");
+                        if (idx >= 0) {
+                            String part = disposition.substring(idx + 9).trim();
+                            // 去掉引号和分号后的内容
+                            int semicolonIdx = part.indexOf(';');
+                            if (semicolonIdx >= 0) {
+                                part = part.substring(0, semicolonIdx).trim();
+                            }
+                            fileName = part.replaceAll("\"", "").trim();
+                        }
                     }
                 }
                 File saveFile = new File(saveDir, fileName);
@@ -169,8 +194,33 @@ public class BatchStatusService {
                 logger.info("batchResult downloaded: " + saveFile.getAbsolutePath());
                 return "下载成功: " + saveFile.getAbsolutePath();
             } else {
-                logger.warning("batchResult HTTP " + responseCode);
-                return "下载失败，服务器响应码: " + responseCode;
+                String errorMessage = null;
+                try (InputStream errorStream = conn.getErrorStream()) {
+                    if (errorStream != null) {
+                        byte[] errorBytes = errorStream.readAllBytes();
+                        String errorText = new String(errorBytes, StandardCharsets.UTF_8).trim();
+                        if (!errorText.isEmpty()) {
+                            errorMessage = errorText;
+                            logger.warning("batchResult error body: " + errorText);
+                        }
+                    }
+                }
+                
+                // 构建更友好的错误消息
+                String result;
+                if (responseCode == 404) {
+                    result = "没有可下载的文件（汇总报告不存在）";
+                    if (errorMessage != null) {
+                        result = errorMessage;
+                    }
+                } else if (errorMessage != null) {
+                    result = errorMessage;
+                } else {
+                    result = "下载失败，服务器响应码: " + responseCode;
+                }
+                
+                logger.warning("batchResult HTTP " + responseCode + ", message: " + result);
+                return result;
             }
         } catch (Exception e) {
             logger.log(Level.SEVERE, "batchResult download error", e);

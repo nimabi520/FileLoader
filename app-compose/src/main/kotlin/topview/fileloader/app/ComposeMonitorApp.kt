@@ -122,8 +122,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 import java.util.logging.Logger
-import java.awt.FileDialog
-import java.awt.Frame
+import javax.swing.JFileChooser
 import javax.swing.SwingUtilities
 
 private data class UploadTask(val file: File, val batchId: String)
@@ -966,17 +965,13 @@ private class ComposeMonitorStore : MonitorCallbacks {
     }
 
     private fun chooseDirectory(title: String): File? {
-        // 使用FileDialog获得原生文件选择器体验
-        // 在macOS上需要设置系统属性才能选择目录
-        System.setProperty("apple.awt.fileDialogForDirectories", "true")
-        val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD)
-        dialog.isVisible = true
-        val file = dialog.file
-        val directory = dialog.directory
-        return if (file != null && directory != null) {
-            File(directory, file)
-        } else if (directory != null) {
-            File(directory)
+        val chooser = JFileChooser().apply {
+            dialogTitle = title
+            fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+            isAcceptAllFileFilterUsed = false
+        }
+        return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+            chooser.selectedFile
         } else {
             null
         }
