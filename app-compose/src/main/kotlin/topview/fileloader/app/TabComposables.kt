@@ -13,14 +13,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.TouchApp
+
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -34,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 @Composable
 internal fun UploadRecordsTab(store: ComposeMonitorStore) {
@@ -94,22 +107,92 @@ internal fun BatchStatusTab(store: ComposeMonitorStore) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(onClick = { store.refreshAllBatchStatuses() }, shape = RoundedCornerShape(14.dp)) {
+            Button(
+                onClick = { store.refreshAllBatchStatuses() },
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = "刷新", modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text("刷新状态")
             }
-            Text("自动刷新", color = colors.onSurfaceVariant)
-            RefreshOptionButton("手动刷新", store)
-            RefreshOptionButton("每10秒", store)
-            RefreshOptionButton("每30秒", store)
-            RefreshOptionButton("每1分钟", store)
-            RefreshOptionButton("每5分钟", store)
-            Text("排序", color = colors.onSurfaceVariant)
-            SortOrderButton("最新在上", "newest", store)
-            SortOrderButton("最早在上", "oldest", store)
+
+            Box {
+                OutlinedButton(
+                    onClick = { store.showRefreshMenu.value = true },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(store.autoRefreshLabel.value, fontSize = 13.sp)
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.height(18.dp))
+                }
+                DropdownMenu(
+                    expanded = store.showRefreshMenu.value,
+                    onDismissRequest = { store.showRefreshMenu.value = false }
+                ) {
+                    val refreshOptions = listOf(
+                        "手动刷新" to Icons.Default.TouchApp,
+                        "每10秒" to Icons.Default.Schedule,
+                        "每30秒" to Icons.Default.Schedule,
+                        "每1分钟" to Icons.Default.Schedule,
+                        "每5分钟" to Icons.Default.Schedule
+                    )
+                    refreshOptions.forEach { (label, icon) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.height(18.dp)) },
+                            trailingIcon = {
+                                if (store.autoRefreshLabel.value == label) {
+                                    Icon(Icons.Default.Check, contentDescription = "已选择", modifier = Modifier.height(18.dp))
+                                }
+                            },
+                            onClick = {
+                                store.setAutoRefresh(label)
+                                store.showRefreshMenu.value = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Box {
+                OutlinedButton(
+                    onClick = { store.showSortMenu.value = true },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (store.sortOrder.value == "newest") "最新在上" else "最早在上", fontSize = 13.sp)
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.height(18.dp))
+                }
+                DropdownMenu(
+                    expanded = store.showSortMenu.value,
+                    onDismissRequest = { store.showSortMenu.value = false }
+                ) {
+                    val sortOptions = listOf("最新在上" to "newest", "最早在上" to "oldest")
+                    sortOptions.forEach { (label, value) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.height(18.dp)) },
+                            trailingIcon = {
+                                if (store.sortOrder.value == value) {
+                                    Icon(Icons.Default.Check, contentDescription = "已选择", modifier = Modifier.height(18.dp))
+                                }
+                            },
+                            onClick = {
+                                store.sortOrder.value = value
+                                store.showSortMenu.value = false
+                            }
+                        )
+                    }
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-        Text("当前模式: ${store.autoRefreshLabel.value}", color = colors.onSurfaceVariant)
         Spacer(modifier = Modifier.height(10.dp))
 
         if (store.batchStatuses.isEmpty()) {
@@ -124,8 +207,9 @@ internal fun BatchStatusTab(store: ComposeMonitorStore) {
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
-            Text("批次ID", modifier = Modifier.weight(0.28f), color = colors.onSurfaceVariant)
-            Text("状态", modifier = Modifier.weight(0.38f), color = colors.onSurfaceVariant)
+            Text("上传时间", modifier = Modifier.weight(0.22f), color = colors.onSurfaceVariant)
+            Text("批次ID", modifier = Modifier.weight(0.26f), color = colors.onSurfaceVariant)
+            Text("状态", modifier = Modifier.weight(0.35f), color = colors.onSurfaceVariant)
             Text("下载报告", modifier = Modifier.weight(0.17f), color = colors.onSurfaceVariant)
             Text("下载异常", modifier = Modifier.weight(0.17f), color = colors.onSurfaceVariant)
         }
@@ -155,8 +239,9 @@ internal fun BatchStatusTab(store: ComposeMonitorStore) {
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(row.batchId, modifier = Modifier.weight(0.28f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(row.status, modifier = Modifier.weight(0.38f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(row.createdAt, modifier = Modifier.weight(0.22f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                        Text(row.batchId, modifier = Modifier.weight(0.26f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(row.status, modifier = Modifier.weight(0.35f), maxLines = 2, overflow = TextOverflow.Ellipsis)
 
                         Box(modifier = Modifier.weight(0.17f), contentAlignment = Alignment.CenterStart) {
                             Button(
@@ -182,52 +267,6 @@ internal fun BatchStatusTab(store: ComposeMonitorStore) {
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun RefreshOptionButton(label: String, store: ComposeMonitorStore) {
-    val active = store.autoRefreshLabel.value == label
-    if (active) {
-        Button(
-            onClick = { store.setAutoRefresh(label) },
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.filledTonalButtonColors(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Text(label)
-        }
-    } else {
-        OutlinedButton(
-            onClick = { store.setAutoRefresh(label) },
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Text(label)
-        }
-    }
-}
-
-@Composable
-private fun SortOrderButton(label: String, value: String, store: ComposeMonitorStore) {
-    val active = store.sortOrder.value == value
-    if (active) {
-        Button(
-            onClick = { store.sortOrder.value = value },
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.filledTonalButtonColors(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Text(label)
-        }
-    } else {
-        OutlinedButton(
-            onClick = { store.sortOrder.value = value },
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Text(label)
         }
     }
 }

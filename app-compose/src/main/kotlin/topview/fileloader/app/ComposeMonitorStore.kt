@@ -113,6 +113,8 @@ internal class ComposeMonitorStore : MonitorCallbacks {
     val logs = mutableStateListOf<String>()
     val progressMap = mutableStateMapOf<String, Int>()
     val sortOrder = mutableStateOf("newest")
+    val showRefreshMenu = mutableStateOf(false)
+    val showSortMenu = mutableStateOf(false)
 
     init {
         restoreLoginState()
